@@ -33,13 +33,13 @@ logger = logging.getLogger("jci-agent.llm")
 DEFAULT_MODEL = "gemini-2.5-pro"
 
 _PROMPT = """あなたは青年会議所(JC)の専務理事を補佐するアシスタントです。
-次の議案(事業計画書)の内容をレビューし、JSONで出力してください。
+次の議案({doc_type})の内容をレビューし、JSONで出力してください。
 出力フィールド:
 - summary: 議案の3行以内の要約
 - points: 審議のポイント(論点)の配列(最大5件)
 - concerns: 曖昧・矛盾・記載不足など要確認点の配列(最大5件)
 助言が目的で最終判断は人間が行います。事実を断定しすぎないでください。
-
+{viewpoints}
 # 議案本文
 {content}
 
@@ -410,21 +410,41 @@ def _target(task: str) -> tuple[str, str, str]:
     )
 
 
-def generate_review(content: str, *, model: str, project: str, location: str) -> Generation:
+#: 議案の種類ごとに加える観点（docs/folder-proposal-check-design.md §5）
+_REVIEW_VIEWPOINTS: dict[str, str] = {
+    "予算書": """
+本文は予算書のスプレッドシートを「【ファイル名／シート名】」ごとに、
+行のセルを「 | 」でつないで写したものです。
+次の観点を必ず確かめてください。
+- 収入の合計と支出の合計（収支差額）
+- 前年度から大きく増減した科目のうち、備考に理由が書かれていないもの
+- 予備費の割合
+- 委員会ごとの事業費と、年間の事業（例会・事業の数）との食い違い
+- 複数の様式（収支予算書と正味財産増減予算書など）で、同じ科目の金額が食い違っていないか
+金額は本文にある数字だけを使い、計算した値は「計算すると」と書いてください。
+""",
+}
+
+
+def generate_review(content: str, *, model: str, project: str, location: str,
+                    doc_type: str = "事業計画書") -> Generation:
     """議案レビューの生成（テストでモックする境界）。"""
+    prompt = _PROMPT.format(content=content, doc_type=doc_type,
+                            viewpoints=_REVIEW_VIEWPOINTS.get(doc_type, ""))
     return _call_gemini(
-        _PROMPT.format(content=content), model=model, project=project, location=location,
+        prompt, model=model, project=project, location=location,
         thinking_budget=thinking_budget_for("proposal_review"),
     )
 
 
-def review_proposal(content: str) -> ReviewOutcome | None:
+def review_proposal(content: str, doc_type: str = "事業計画書") -> ReviewOutcome | None:
     """議案本文をレビューして結果と使用トークンを返す。失敗時は None。"""
     if not content or not content.strip():
         return None
     model, project, location = _target("proposal_review")
     try:
-        gen = generate_review(content, model=model, project=project, location=location)
+        gen = generate_review(content, model=model, project=project, location=location,
+                              doc_type=doc_type)
         data = json.loads(gen.text)
         review = LlmReview(
             summary=str(data.get("summary", "")).strip(),

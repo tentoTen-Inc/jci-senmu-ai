@@ -741,6 +741,13 @@ class ProposalFeedback(BaseModel):
     text: str
 
 
+class ProposalSource(BaseModel):
+    """資料フォルダから読んだファイル（docs/folder-proposal-check-design.md）。"""
+
+    name: str
+    url: str
+
+
 class Proposal(BaseModel):
     proposal_id: str
     lom_id: str = Field(default_factory=_default_lom_id)
@@ -779,6 +786,10 @@ class Proposal(BaseModel):
     submit_deadline_set_at: datetime | None = None
     submit_plans: list[SubmitPlan] = Field(default_factory=list)  # 提出予定日（新しいものが最後）
     alerts: list[ProposalAlert] = Field(default_factory=list)  # 担当副理事長への未提出の知らせ
+    # --- 資料フォルダ（storage_uri）から読んだ内容（作業文書を持たない予算書など） ---
+    sources: list[ProposalSource] = Field(default_factory=list)
+    source_error: str | None = None  # 読めなかった理由
+    sources_read_at: datetime | None = None
 
 
 # --------------------------------------------------------------------------- #
