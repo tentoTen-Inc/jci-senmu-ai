@@ -307,18 +307,18 @@ def alert_message(p: Proposal, key: str, today: date) -> FlexMessage:
 
 
 def _push_one(repo: Repository, member: Member, message: Message, body: str,
-              now: datetime) -> bool | None:
+              now: datetime, kind: str = "proposal_overdue") -> bool | None:
     """1人に送る（配信のガードレール・記録あり）。送れた True、届かない False、保留 None。"""
-    job = DeliveryJob(job_id=f"proposal_overdue_{now:%Y%m%d%H%M%S}_{member.member_id}"
+    job = DeliveryJob(job_id=f"{kind}_{now:%Y%m%d%H%M%S}_{member.member_id}"
                              f"_{uuid.uuid4().hex[:4]}",
-                      type="proposal_overdue", targets=[member.member_id], scheduled_at=now,
+                      type=kind, targets=[member.member_id], scheduled_at=now,
                       status=DeliveryStatus.queued)
     repo.save_delivery_job(job)
     try:
         report = execute_delivery(repo, job, body, now=now,
                                   sender=line_push.member_messages_sender(repo, [message]))
     except Exception:  # noqa: BLE001 - 友だち未追加など。届かなかったとして扱う
-        logger.exception("未提出の知らせを送れませんでした: %s", member.member_id)
+        logger.exception("知らせを送れませんでした（%s）: %s", kind, member.member_id)
         return False
     if report.halted or report.deferred:
         return None

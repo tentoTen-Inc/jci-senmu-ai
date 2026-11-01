@@ -7,10 +7,10 @@ from datetime import datetime
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
+from . import proposal_format
 from .audit import write_audit
 from .deps import get_repo
 from .drive_import import import_drive_folder
-from .format_check import run_format_check
 from .inference import record_inference
 from .llm import model_for, review_proposal
 from .models import (
@@ -161,16 +161,24 @@ def update_proposal(proposal_id: str, payload: ProposalUpdate):
 
 
 @router.post("/proposals/{proposal_id}/format-check")
-def format_check(proposal_id: str):
+def format_check(
+    proposal_id: str,
+    x_goog_authenticated_user_email: str | None = Header(default=None),
+):
+    """形式チェック。議案書の体裁（フォント・半角など）は直して、委員長に知らせる。"""
     repo = get_repo()
     p = repo.get_proposal(proposal_id)
     if p is None:
         raise HTTPException(status_code=404, detail="proposal not found")
-    result = run_format_check(p)
-    result.checked_at = datetime.now()
-    p.format_check = result
-    repo.upsert_proposal(p)
-    return result
+    now = datetime.now()
+    p = proposal_format.check(repo, p, now)
+    if p.format_check and p.format_check.fixed_at == now:  # 今回、文書を直した
+        write_audit(
+            repo, actor=_actor(x_goog_authenticated_user_email),
+            action="proposal.format_fix", target=proposal_id,
+            detail=" / ".join(p.format_check.fixed),
+        )
+    return p.format_check
 
 
 @router.post("/proposals/{proposal_id}/llm-review")
