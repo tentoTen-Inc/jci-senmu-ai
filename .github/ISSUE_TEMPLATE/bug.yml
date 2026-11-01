@@ -1,0 +1,48 @@
+name: 不具合の報告
+description: 動かない・おかしな表示になる、など
+labels: ["不具合"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        会員の名前・連絡先・LINE のグループ名・本番の URL などは書かないでください。この Issue は誰でも見られます。
+  - type: dropdown
+    id: area
+    attributes:
+      label: どの機能のことですか
+      options:
+        - LINE のメニュー・トーク
+        - 予定と出欠
+        - 日程調整
+        - AI に聞く
+        - 資料を作る・直す（議案書づくり）
+        - 委員会の議案
+        - 意見箱
+        - 管理画面
+        - 導入・セットアップ
+        - その他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 何をしたら
+      placeholder: "例）管理画面の「日程調整」で候補日を 10 個入れて［作成］を押した"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: どうなったか
+      description: エラーの文言や画面のようすを、個人情報を消したうえで貼ってください
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 本来どうなってほしいか
+  - type: input
+    id: version
+    attributes:
+      label: 使っている版（任意）
+      description: コミットの ID や、取り込んだ日付など

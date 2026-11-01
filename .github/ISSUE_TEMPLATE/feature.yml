@@ -1,0 +1,26 @@
+name: ほしい機能・使いにくいところ
+description: こんな機能がほしい、ここが使いにくい、など
+labels: ["ほしい機能"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        会員の名前・連絡先・LINE のグループ名などは書かないでください。この Issue は誰でも見られます。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 困っていること
+      description: いまどんな場面で、何に手間がかかっているか
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: こうなるとうれしい
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: そのほか（任意）
+      description: LOM での運用のしかた、参考になる資料など

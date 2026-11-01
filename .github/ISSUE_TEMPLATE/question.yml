@@ -1,0 +1,18 @@
+name: 質問
+description: 使い方・導入のしかたについての質問
+labels: ["質問"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        会員の名前・連絡先・本番の URL や ID などは書かないでください。この Issue は誰でも見られます。
+  - type: textarea
+    id: question
+    attributes:
+      label: 質問
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: 試したこと・読んだ資料（任意）

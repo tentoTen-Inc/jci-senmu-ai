@@ -14,6 +14,9 @@ import {
   useUi,
 } from "../components/ui";
 
+// 専務AI（オープンソース）の開発元へのご意見フォーム。どの LOM でも同じ宛先
+const DEVELOPER_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeNLtWm7ROaQBxM1acLK0tuvkFAP1HMK8vWrHvWwsnBk7r_HQ/viewform";
+
 // 意見箱（docs/feedback-box-design.md §5）。会員が LINE の［意見箱］から送った意見と、AI の分類・傾向のまとめ
 
 type Status = "new" | "in_progress" | "done" | "declined";
@@ -118,6 +121,11 @@ export default function FeedbackPage() {
       <PageHeader
         title="意見箱"
         description="会員が LINE の［意見箱］から送った不具合・要望などです。AI が種類・対象の機能・緊急度を付けています。"
+        actions={
+          <a href={DEVELOPER_FORM_URL} target="_blank" rel="noreferrer">
+            <Button size="sm" variant="ghost">開発元へ意見を送る</Button>
+          </a>
+        }
       />
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">

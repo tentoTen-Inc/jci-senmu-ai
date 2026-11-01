@@ -119,6 +119,12 @@ cd web && npm ci && npm run dev
 - [docs/configuration.md](docs/configuration.md) — 設定項目
 - [docs/runbook.md](docs/runbook.md) — 運用手順
 
+## ご意見・不具合の報告
+
+- **[ご意見フォーム](https://docs.google.com/forms/d/e/1FAIpQLSeNLtWm7ROaQBxM1acLK0tuvkFAP1HMK8vWrHvWwsnBk7r_HQ/viewform)**（GitHub のアカウントは要りません）から、不具合・ほしい機能・質問を送れます。開発元が確認したうえで、このリポジトリの Issue として公開することがあります。
+- GitHub のアカウントをお持ちの方は、[Issue](../../issues/new/choose) から直接どうぞ。
+- 会員の名前・連絡先・LINE のグループ名などの個人情報は、どちらにも書かないでください。
+
 ## コントリビュート・セキュリティ
 
 - 開発に参加する方は [CONTRIBUTING.md](CONTRIBUTING.md) を読んでください。

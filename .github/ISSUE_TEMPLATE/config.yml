@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ご意見フォーム（GitHub のアカウントが要りません）
+    url: https://docs.google.com/forms/d/e/1FAIpQLSeNLtWm7ROaQBxM1acLK0tuvkFAP1HMK8vWrHvWwsnBk7r_HQ/viewform
+    about: 不具合・ほしい機能・質問を送れます。開発元が確認して Issue にします。
+  - name: 脆弱性の報告
+    url: https://github.com/tentoTen-Inc/jci-senmu-ai/security/advisories/new
+    about: 脆弱性は Issue に書かず、非公開の報告から知らせてください（SECURITY.md）。

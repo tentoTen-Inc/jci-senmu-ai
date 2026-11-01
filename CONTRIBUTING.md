@@ -6,6 +6,7 @@
 ## はじめる前に
 
 - 脆弱性は Issue に書かず、[SECURITY.md](SECURITY.md) の方法で知らせてください。
+- GitHub のアカウントがない方は、[ご意見フォーム](https://docs.google.com/forms/d/e/1FAIpQLSeNLtWm7ROaQBxM1acLK0tuvkFAP1HMK8vWrHvWwsnBk7r_HQ/viewform) から送れます（開発元が確認して Issue にします）。
 - 大きめの変更（新機能、データの持ち方の変更）は、先に Issue で相談してください。
   本プロジェクトでは、新機能は**設計書（`docs/*-design.md`）→ Issue → Pull Request** の順で進めています。
 
