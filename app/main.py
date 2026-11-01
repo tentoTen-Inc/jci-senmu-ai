@@ -57,6 +57,7 @@ from . import (
     line_push,
     line_worker,
     lom,
+    proposal_format,
     proposal_submit,
     proposal_sync,
     rich_menu_link,
@@ -581,6 +582,8 @@ def tasks_tick():
     # 議案の提出・提出締切を専務に知らせる（写した後の空欄の数で。proposal-ledger-design §10）
     try:
         proposal_notice_result = proposal_submit.process(repo, now)
+        # 体裁を直したことの委員長への知らせ（静音時間で送れなかった分）
+        proposal_notice_result["format_fixes"] = proposal_format.send_pending(repo, now)
     except Exception:  # noqa: BLE001 - tick 本体を止めない
         logger.exception("議案の知らせに失敗しました")
         proposal_notice_result = {"error": "proposal_notice_failed"}

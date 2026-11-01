@@ -18,7 +18,15 @@ import { useLom } from "../api/lom";
 
 // 議案（docs/admin-ui-design.md §3）: 段階ごとのカンバン・詳細・Drive からの取り込み
 
-type FormatCheck = { passed: boolean; issues: string[]; checked_at?: string | null } | null;
+type FormatCheck = {
+  passed: boolean;
+  issues: string[];
+  checked_at?: string | null;
+  fixed?: string[];
+  fixed_at?: string | null;
+  notified_at?: string | null;
+  notified_to?: string[];
+} | null;
 type LlmReview = { summary: string; points: string[]; concerns: string[]; reviewed_at?: string | null } | null;
 type SedApproval = { status: string; by: string | null; at?: string | null; comment: string | null };
 type Deadlines = { entry: string | null; submit: string | null; deliver: string | null };
@@ -442,6 +450,12 @@ function KanbanCard({ p, active, onClick }: { p: Proposal; active: boolean; onCl
   );
 }
 
+function fixNoticeLabel(fc: NonNullable<FormatCheck>): string {
+  if (!fc.notified_at) return "委員長への LINE の知らせは、静音時間が明けてから送ります。";
+  if (fc.notified_to?.length) return `${fc.notified_to.join("・")}さんに LINE で知らせました（${fmtDateTime(fc.notified_at)}）。`;
+  return "委員長に LINE で知らせられませんでした（委員長が見つからない、または LINE 未連携）。直接お伝えください。";
+}
+
 // ---------------------------------------------------------------- 右から出る詳細
 function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   useEffect(() => {
@@ -512,6 +526,23 @@ function Detail({
     } finally {
       setBusy(null);
     }
+  }
+
+  async function formatCheck() {
+    if (p.doc_id) {
+      const ok = await confirm({
+        title: "形式チェックをしますか？",
+        body: (
+          <>
+            フォント・文字の大きさ・全角の英数字と記号は、議案書（Google ドキュメント）を直接直します。書かれている内容は変えません。直したときは、
+            <b>{p.committee ? `${p.committee}の委員長` : "議案の担当者"}</b>に LINE で知らせます。
+          </>
+        ),
+        confirmLabel: "チェックする",
+      });
+      if (!ok) return;
+    }
+    await run("format", "format-check", undefined, "形式チェックをしました");
   }
 
   async function approve() {
@@ -662,10 +693,10 @@ function Detail({
       <section className="rounded-card bg-white p-5">
         <h3 className="mb-1 font-extrabold">議案書のチェック</h3>
         <p className="mb-3 text-xs text-ink-sub">
-          形式チェックは必須項目と半角・全角の表記を調べます。AI の確認は内容の要約と気になる点を出します（最終判断は専務が行います）。
+          形式チェックは必須項目と表記を調べます。フォント・文字の大きさ・全角の英数字のような体裁は議案書を直接直し、直したことを委員長に LINE で知らせます。AI の確認は内容の要約と気になる点を出します（最終判断は専務が行います）。
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={!!busy} onClick={() => run("format", "format-check", undefined, "形式チェックをしました")}>
+          <Button size="sm" disabled={!!busy} onClick={formatCheck}>
             {busy === "format" ? "チェック中…" : p.format_check ? "形式チェックをやり直す" : "形式チェック"}
           </Button>
           <Button
@@ -685,7 +716,7 @@ function Detail({
           <div className="mt-4">
             <div className="flex items-center gap-2 text-sm font-bold">
               形式チェック
-              {p.format_check.passed ? <Badge tone="green">問題なし</Badge> : <Badge tone="amber">直す点 {p.format_check.issues.length}件</Badge>}
+              {p.format_check.passed ? <Badge tone="green">問題なし</Badge> : <Badge tone="amber">委員会で直す点 {p.format_check.issues.length}件</Badge>}
             </div>
             {p.format_check.issues.length > 0 && (
               <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-hold">
@@ -693,6 +724,20 @@ function Detail({
                   <li key={k}>{i.replace("本文(content)", "本文")}</li>
                 ))}
               </ul>
+            )}
+            {!!p.format_check.fixed?.length && (
+              <div className="mt-3 rounded-xl bg-green-50 px-3 py-2 text-sm">
+                <div className="text-xs font-bold text-ink-sub">
+                  議案書を直した点（体裁だけ。内容は変えていません）
+                  {p.format_check.fixed_at && <span className="ml-1 font-normal">{fmtDateTime(p.format_check.fixed_at)}</span>}
+                </div>
+                <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                  {p.format_check.fixed.map((x, k) => (
+                    <li key={k}>{x}</li>
+                  ))}
+                </ul>
+                <div className="mt-1 text-xs text-ink-sub">{fixNoticeLabel(p.format_check)}</div>
+              </div>
             )}
           </div>
         )}

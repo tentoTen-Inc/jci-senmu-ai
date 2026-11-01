@@ -29,6 +29,13 @@ REQUIRED_SECTIONS_BY_DOCTYPE: dict[str, list[str]] = {
 # 全角英数（Ａ-Ｚ ａ-ｚ ０-９）と代表的な全角記号
 _FULLWIDTH_ALNUM = re.compile(r"[Ａ-Ｚａ-ｚ０-９]")
 _FULLWIDTH_SYMBOLS = "％＆＠＃＋－＝／（）！？．，：；"
+#: 半角にする文字（どれも U+FF01〜U+FF5E。U+FEE0 を引くと半角になる。doc_format で直す）
+FULLWIDTH_CHARS = frozenset(
+    [chr(c) for c in range(ord("Ａ"), ord("Ｚ") + 1)]
+    + [chr(c) for c in range(ord("ａ"), ord("ｚ") + 1)]
+    + [chr(c) for c in range(ord("０"), ord("９") + 1)]
+    + list(_FULLWIDTH_SYMBOLS)
+)
 
 
 def check_required_sections(content: str, doc_type: str) -> list[str]:

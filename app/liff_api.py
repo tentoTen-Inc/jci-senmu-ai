@@ -21,6 +21,7 @@ from . import (
     feedback_box,
     line_link,
     line_push,
+    proposal_format,
     proposal_submit,
     proposal_sync,
     roles,
@@ -249,8 +250,11 @@ def change_submission(repo: Repository, member: Member, proposal_id: str, action
     if not any(p.proposal_id == proposal_id for p in _visible_proposals(repo, member)):
         raise LiffError(404, "議案が見つかりません。")
     if action == "submit":
-        p = proposal_submit.submit(repo, member, proposal_id, now)
+        # 提出したら形式チェックをして、体裁は直す（proposal-ledger-design §11）
+        p = proposal_submit.submit(repo, member, proposal_id, now, check=proposal_format.check)
         message = f"{proposal_submit.doc_label(p)}を提出しました。専務に知らせます。"
+        if p.format_check and p.format_check.fixed_at == now:
+            message += "議案書の体裁（フォントなど）を直しました。"
     else:
         p = proposal_submit.withdraw(repo, member, proposal_id, now)
         message = f"{proposal_submit.doc_label(p)}の提出を取り消しました。"

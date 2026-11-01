@@ -680,8 +680,14 @@ class ProposalDeadlines(BaseModel):
 
 class FormatCheckResult(BaseModel):
     passed: bool
-    issues: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)  # 委員会で直す点
     checked_at: datetime | None = None
+    #: 専務AI が文書を直したこと（フォント・半角など体裁だけ。docs/proposal-ledger-design.md §11）
+    fixed: list[str] = Field(default_factory=list)
+    fixed_at: datetime | None = None
+    #: 直したことを委員長に知らせた時刻と相手（静音時間なら、明けてから tick で送る）
+    notified_at: datetime | None = None
+    notified_to: list[str] = Field(default_factory=list)
 
 
 class LlmReview(BaseModel):

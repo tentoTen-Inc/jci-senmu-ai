@@ -99,6 +99,7 @@ LOM ごとに変わる名前・URL です。コードには直書きしません
 | `DRIVE_KNOWLEDGE_FOLDERS` | （なし） | 検索の対象にするドライブのフォルダ ID（カンマ区切り）。未設定ならドライブ取込は無効 |
 | `COMMITTEE_DOCS_FOLDER` | （なし） | 委員会資料のフォルダ ID。LINE から資料を編集する機能に使う |
 | `PLAN_TEMPLATE_DOC` | （なし） | 議案書の雛形にする Google ドキュメントの ID |
+| `DOC_FONT` | `Arial` | 議案書のフォント。形式チェックで、これ以外のフォントの文字をそろえる |
 | `GMAIL_LABEL` | `対外連絡` | 対外連絡として取り込む Gmail のラベル |
 
 ### 手元の開発用

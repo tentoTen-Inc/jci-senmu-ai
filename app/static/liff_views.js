@@ -127,7 +127,7 @@
           const blanks = p.blanks ? `空欄が ${p.blanks} 欄あります。` : "";
           const submit = p.can_submit ? el("button", {
             type: "button", class: "primary",
-            onclick: change("submit", `「${p.title}」を提出します。${blanks}専務に LINE で知らせます。よろしいですか？`),
+            onclick: change("submit", `「${p.title}」を提出します。${blanks}専務に LINE で知らせます。議案書のフォントや全角の英数字などの体裁は、提出のときに自動で直します。よろしいですか？`),
           }, "提出する") : null;
           const withdraw = p.can_withdraw ? el("button", {
             type: "button",

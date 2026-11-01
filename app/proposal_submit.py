@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
 from linebot.v3.messaging import FlexContainer, FlexMessage, Message, TextMessage
@@ -117,8 +118,15 @@ def _change(repo: Repository, member: Member, p: Proposal, stage: ProposalStage,
     return p
 
 
-def submit(repo: Repository, member: Member, proposal_id: str, now: datetime) -> Proposal:
-    """エントリー → 資料提出。専務への知らせはすぐ送る（静音時間なら明けてから）。"""
+def submit(repo: Repository, member: Member, proposal_id: str, now: datetime,
+           check: Callable[[Repository, Proposal, datetime], Proposal] | None = None,
+           ) -> Proposal:
+    """エントリー → 資料提出。専務への知らせはすぐ送る（静音時間なら明けてから）。
+
+    check を渡すと、提出したあと専務に知らせる前に形式チェック（体裁の自動修正・委員長への
+    知らせを含む。proposal_format.check）を行い、その結果も専務への知らせに載せる。
+    チェックに失敗しても提出は取り消さない。
+    """
     p = _get(repo, proposal_id)
     if not committee_docs.can_edit(member, p.committee or ""):
         raise SubmitError(403, "この委員会の資料を提出できるのは、理事長・専務理事・担当副理事長・"
@@ -128,6 +136,11 @@ def submit(repo: Repository, member: Member, proposal_id: str, now: datetime) ->
     if p.sed_approval.status == "returned":  # 差し戻しから出し直したら、もう一度専務が判断する
         p = p.model_copy(update={"sed_approval": SedApproval()})
     p = _change(repo, member, p, ProposalStage.submitted, now, "proposal.submit")
+    if check is not None:
+        try:
+            p = check(repo, p, now)
+        except Exception:  # noqa: BLE001 - 提出そのものは済んでいる
+            logger.exception("提出時の形式チェックに失敗: %s", p.proposal_id)
     _notify_submitted(repo, p, now)
     return p
 
@@ -161,6 +174,12 @@ def submit_text(p: Proposal) -> str:
     who = p.history[-1].by.removeprefix(LIFF_BY_PREFIX)
     lines = [f"【提出】{doc_label(p)}が提出されました（{who}さん）。",
              f"空欄の欄: {blank_count(p)}"]
+    fc = p.format_check
+    if fc is not None:
+        if fc.fixed:
+            lines.append(f"体裁を直しました: {len(fc.fixed)}点（委員長に知らせます）")
+        lines.append(f"委員会で直す点: {len(fc.issues)}件" if fc.issues else
+                     "形式チェック: 問題なし")
     if p.storage_uri:
         lines.append(p.storage_uri)
     return "\n".join(lines)
@@ -307,18 +326,18 @@ def alert_message(p: Proposal, key: str, today: date) -> FlexMessage:
 
 
 def _push_one(repo: Repository, member: Member, message: Message, body: str,
-              now: datetime) -> bool | None:
+              now: datetime, kind: str = "proposal_overdue") -> bool | None:
     """1人に送る（配信のガードレール・記録あり）。送れた True、届かない False、保留 None。"""
-    job = DeliveryJob(job_id=f"proposal_overdue_{now:%Y%m%d%H%M%S}_{member.member_id}"
+    job = DeliveryJob(job_id=f"{kind}_{now:%Y%m%d%H%M%S}_{member.member_id}"
                              f"_{uuid.uuid4().hex[:4]}",
-                      type="proposal_overdue", targets=[member.member_id], scheduled_at=now,
+                      type=kind, targets=[member.member_id], scheduled_at=now,
                       status=DeliveryStatus.queued)
     repo.save_delivery_job(job)
     try:
         report = execute_delivery(repo, job, body, now=now,
                                   sender=line_push.member_messages_sender(repo, [message]))
     except Exception:  # noqa: BLE001 - 友だち未追加など。届かなかったとして扱う
-        logger.exception("未提出の知らせを送れませんでした: %s", member.member_id)
+        logger.exception("知らせを送れませんでした（%s）: %s", kind, member.member_id)
         return False
     if report.halted or report.deferred:
         return None

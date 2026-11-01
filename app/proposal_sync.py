@@ -136,6 +136,14 @@ def apply_summary_fields(proposal: Proposal, fields: dict[str, str]) -> Proposal
     })
 
 
+def apply_document(proposal: Proposal, content: dict) -> Proposal:
+    """読み取った文書（documents.get の結果）の項目を台帳に写す（体裁を直した後など）。"""
+    fields = {f.name: f.text for f in committee_docs.extract_fields(content)}
+    if proposal.doc_type == SUMMARY_TYPE:
+        return apply_summary_fields(proposal, fields)
+    return apply_fields(proposal, fields, proposal.title)
+
+
 def blank_count(proposal: Proposal) -> int:
     """空欄の欄の数（記入例「◯」のままも空欄とみなす）。"""
     return sum(1 for v in proposal.sections.values()
