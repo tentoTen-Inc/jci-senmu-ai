@@ -36,8 +36,8 @@ _PROMPT = """あなたは青年会議所(JC)の専務理事を補佐するアシ
 次の議案({doc_type})の内容をレビューし、JSONで出力してください。
 出力フィールド:
 - summary: 議案の3行以内の要約
-- points: 審議のポイント(論点)の配列(最大5件)
-- concerns: 曖昧・矛盾・記載不足など要確認点の配列(最大5件)
+- points: 審議のポイント(論点)の配列(最大5件。各要素は1つの文字列)
+- concerns: 曖昧・矛盾・記載不足など要確認点の配列(最大5件。各要素は1つの文字列)
 助言が目的で最終判断は人間が行います。事実を断定しすぎないでください。
 {viewpoints}
 # 議案本文
@@ -437,6 +437,13 @@ def generate_review(content: str, *, model: str, project: str, location: str,
     )
 
 
+def _item_text(item) -> str:
+    """論点・要確認点の1件を文にする。見出しと説明のオブジェクトで返ることがある（予算書など）。"""
+    if isinstance(item, dict):
+        return "：".join(str(v).strip() for v in item.values() if str(v).strip())
+    return str(item).strip()
+
+
 def review_proposal(content: str, doc_type: str = "事業計画書") -> ReviewOutcome | None:
     """議案本文をレビューして結果と使用トークンを返す。失敗時は None。"""
     if not content or not content.strip():
@@ -448,8 +455,8 @@ def review_proposal(content: str, doc_type: str = "事業計画書") -> ReviewOu
         data = json.loads(gen.text)
         review = LlmReview(
             summary=str(data.get("summary", "")).strip(),
-            points=[str(x) for x in data.get("points", [])][:5],
-            concerns=[str(x) for x in data.get("concerns", [])][:5],
+            points=[_item_text(x) for x in data.get("points", [])][:5],
+            concerns=[_item_text(x) for x in data.get("concerns", [])][:5],
             model=model,
         )
     except Exception:  # noqa: BLE001 - LLM未設定/失敗でも本処理は止めない

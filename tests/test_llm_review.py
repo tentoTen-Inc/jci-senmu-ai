@@ -42,6 +42,18 @@ def test_review_proposal_parses_json(monkeypatch):
     assert (outcome.usage.input_tokens, outcome.usage.output_tokens) == (1200, 300)
 
 
+def test_review_items_returned_as_objects_become_text(monkeypatch):
+    """予算書の観点を足すと、要確認点が {見出し, 説明} のオブジェクトで返ることがある。"""
+    def fake(content, **kw):
+        return llm.Generation(text=(
+            '{"summary":"s","points":[{"point":"収支差額","description":"収入と支出が一致"}],'
+            '"concerns":[{"concern":"様式間の不一致","description":"印刷製本費が違う"},"文字列"]}'))
+    monkeypatch.setattr(llm, "generate_review", fake)
+    review = review_proposal("予算書", doc_type="予算書").review
+    assert review.points == ["収支差額：収入と支出が一致"]
+    assert review.concerns == ["様式間の不一致：印刷製本費が違う", "文字列"]
+
+
 def test_review_proposal_empty_returns_none():
     assert review_proposal("") is None
 

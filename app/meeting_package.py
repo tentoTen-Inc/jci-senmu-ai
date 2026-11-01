@@ -1,12 +1,14 @@
 """会議単位の事前共有パッケージ生成（F6-7）。
 
 上程先イベントに紐づく議案を、目次付きの Markdown 1枚にまとめる。
+上程先は議案の `event_id`、なければ上程先の日程調整（`meeting_poll_id`）で決まった会議。
 AI生成物（要約・論点）は「参考」と明示し、原本は Drive リンク（`storage_uri`）を示す。
 """
 from __future__ import annotations
 
 from datetime import datetime
 
+from .menu_lists import STAGE_LABELS
 from .models import Event, Proposal
 from .repository import Repository
 
@@ -28,7 +30,7 @@ def _proposal_section(index: int, p: Proposal, names: dict[str, str]) -> list[st
     meta = [f"委員会: {p.committee or '未設定'}"]
     if p.owner_member_id:
         meta.append(f"担当: {names.get(p.owner_member_id, p.owner_member_id)}")
-    meta.append(f"ステージ: {p.stage.value}")
+    meta.append(f"ステージ: {STAGE_LABELS.get(p.stage, p.stage.value)}")
     meta.append(f"専務確認: {APPROVAL_LABEL.get(p.sed_approval.status, p.sed_approval.status)}")
     lines.append(" / ".join(meta))
 
@@ -36,6 +38,8 @@ def _proposal_section(index: int, p: Proposal, names: dict[str, str]) -> list[st
         lines.append(f"- 提出締切: {_fmt_dt(p.deadlines.submit)}")
     if p.storage_uri:
         lines.append(f"- 原本: {p.storage_uri}")
+    # 資料フォルダから読んだファイル（予算書の様式など）
+    lines += [f"    - {s.name}: {s.url}" for s in p.sources]
 
     if p.format_check is not None:
         if p.format_check.passed:
@@ -59,10 +63,19 @@ def _proposal_section(index: int, p: Proposal, names: dict[str, str]) -> list[st
     return lines
 
 
+def _event_id(repo: Repository, p: Proposal) -> str | None:
+    """議案の上程先の会議（日程調整で決まった会議も含む）。"""
+    if p.event_id:
+        return p.event_id
+    poll = repo.get_poll(p.meeting_poll_id) if p.meeting_poll_id else None
+    return poll.event_id if poll is not None else None
+
+
 def build_package(repo: Repository, event: Event, *, now: datetime) -> str:
-    """イベントに上程される議案の事前共有パッケージ（Markdown）を返す。"""
+    """イベントに上程される議案の事前共有パッケージ（Markdown）を返す。閉じた議案は含めない。"""
     proposals = sorted(
-        (p for p in repo.list_proposals() if p.event_id == event.event_id),
+        (p for p in repo.list_proposals()
+         if p.status != "closed" and _event_id(repo, p) == event.event_id),
         key=lambda p: (p.number or "", p.proposal_id),
     )
     names = {m.member_id: m.name for m in repo.list_members()}
