@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import committee_docs, doc_format, line_push, main, proposal_format
+from app import committee_docs, doc_format, line_push, main, proposal_format, proposal_submit
 from app.deps import set_repo
-from app.models import CommitteeSeat, Member, Proposal
+from app.models import CommitteeSeat, Member, Proposal, ProposalStage
 from app.repository import InMemoryRepository
 from tests.conftest import ADMIN_AUTH
 
@@ -266,3 +266,51 @@ def test_api_records_audit(repo, docs, monkeypatch):
     assert res.json()["notified_to"] == ["委員長 太郎"]
     actions = [a.action for a in repo.list_audit()]
     assert "proposal.format_fix" in actions
+
+
+# --------------------------------------------------------------------------- #
+# 委員長が［提出する］を押したとき
+# --------------------------------------------------------------------------- #
+def _submit(repo, check=proposal_format.check):
+    repo.upsert_member(Member(member_id="m_sed", name="専務 四郎", line_user_id="U_sed",
+                              officer_role="専務理事"))
+    chair = repo.get_member("m_chair")
+    return proposal_submit.submit(repo, chair, "p1", MORNING, check=check)
+
+
+def test_submit_checks_and_fixes_before_telling_sed(repo, docs, pushed):
+    p = _submit(repo)
+    assert p.stage == ProposalStage.submitted
+    assert len(docs["applied"]) == 1 and p.format_check.fixed_at == MORNING
+    sent = dict(pushed)
+    assert "【体裁を直しました】" in sent["U_chair"]
+    assert "【提出】" in sent["U_sed"]
+    assert f"体裁を直しました: {len(p.format_check.fixed)}点" in sent["U_sed"]
+
+
+def test_submit_goes_through_even_if_check_fails(repo, pushed):
+    def broken(repo, p, now):
+        raise RuntimeError("boom")
+    p = _submit(repo, check=broken)
+    assert p.stage == ProposalStage.submitted
+    assert [to for to, _ in pushed] == ["U_sed"]
+
+
+def test_liff_submit_runs_check(repo, docs, pushed, monkeypatch):
+    from app import liff_api
+    from app import schedule_poll as sp
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return MORNING
+    monkeypatch.setattr(liff_api, "datetime", _Clock)
+    monkeypatch.setenv("LIFF_ID", "2000000000-abcdEFGH")
+    monkeypatch.setenv("LINE_LOGIN_CHANNEL_ID", "2000000000")
+    sp._token_cache.clear()
+    monkeypatch.setattr(sp, "_verify_id_token_raw", lambda t, c: {"sub": "U_chair"})
+    res = TestClient(main.app).post("/liff/api/proposals/p1/submit",
+                                    headers={"Authorization": "Bearer tok"})
+    assert res.status_code == 200, res.text
+    assert "体裁" in res.json()["message"]
+    assert len(docs["applied"]) == 1
