@@ -38,19 +38,23 @@
 
 ```mermaid
 flowchart LR
-  subgraph LINE
-    U[会員・役員] --> OA[LINE 公式アカウント]
-    LIFF[LIFF 画面]
+  subgraph LINE["LINE"]
+    U["会員・役員"] --> OA["LINE 公式アカウント"]
+    LIFF["LIFF 画面"]
   end
-  OA -- Webhook --> AG[Cloud Run<br/>jci-sed-agent<br/>公開]
+  OA -- "Webhook" --> AG["Cloud Run<br/>jci-sed-agent<br/>公開"]
   LIFF --> AG
-  SCH[Cloud Scheduler<br/>毎時] -- /tasks/tick --> AG
-  ADM[役員・事務局] -- IAP --> AD[Cloud Run<br/>jci-sed-admin<br/>管理画面]
-  AG & AD --> FS[(Firestore)]
-  AG & AD --> VX[Vertex AI<br/>Gemini]
-  AG --> PS[Pub/Sub] --> BQ[(BigQuery<br/>データレイク・索引)]
-  PS --> GCS[(Cloud Storage<br/>共有ファイル)]
-  AG & AD --> GW[Google Workspace<br/>Calendar / Drive / Docs / Gmail / Forms]
+  SCH["Cloud Scheduler<br/>毎時"] -- "/tasks/tick" --> AG
+  ADM["役員・事務局"] -- "IAP" --> AD["Cloud Run<br/>jci-sed-admin<br/>管理画面"]
+  AG --> FS[("Firestore")]
+  AD --> FS
+  AG --> VX["Vertex AI<br/>Gemini"]
+  AD --> VX
+  AG --> PS["Pub/Sub"]
+  PS --> BQ[("BigQuery<br/>データレイク・索引")]
+  PS --> GCS[("Cloud Storage<br/>共有ファイル")]
+  AG --> GW["Google Workspace<br/>Calendar / Drive / Docs / Gmail / Forms"]
+  AD --> GW
 ```
 
 - **Cloud Run を 2 つ**動かします。同じイメージを使い、環境変数 `ROLE` で役割を分けます。
