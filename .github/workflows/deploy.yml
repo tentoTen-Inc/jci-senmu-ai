@@ -58,6 +58,18 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      # 公開リポジトリでは Actions のログを誰でも見られる。gcloud run deploy が表示する
+      # サービスの URL（run.app の 2 つの形）を、表示される前に伏せる
+      - name: Hide service URLs in logs
+        run: |
+          for s in jci-sed-agent jci-sed-admin; do
+            urls="$(gcloud run services describe "$s" --region "${REGION}" --project "${PROJECT_ID}" \
+              --format='value(metadata.annotations."run.googleapis.com/urls")' 2>/dev/null || true)"
+            for u in $(echo "${urls}" | tr -d '[]" ' | tr ',' ' '); do
+              echo "::add-mask::${u}"
+            done
+          done
+
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 
