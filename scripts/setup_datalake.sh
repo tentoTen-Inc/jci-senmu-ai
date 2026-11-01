@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# LINEメッセージ・データレイクの GCP 側セットアップ（冪等。何度実行してもよい）。
+# 設計: docs/datalake-design.md §2 / §5 / §9
+#
+#   LINE → Webhook(jci-sed-agent) → Pub/Sub(line-events)
+#            ├ BigQuery サブスクリプション → line_lake.events_raw（コード不要）
+#            └ Push サブスクリプション → ワーカー(/pubsub/line-worker) → Cloud Storage
+#
+# 前提: gcloud / bq がプロジェクトのオーナー相当で認証済み。
+#       案件ごとの認証分離のため、このリポジトリ直下で direnv 有効な状態で実行すること。
+# 使い方: ./scripts/setup_datalake.sh
+set -euo pipefail
+
+PROJECT="${GCP_PROJECT_ID:?GCP_PROJECT_ID を設定してください}"
+REGION="${GCP_REGION:-asia-northeast1}"
+DATASET="${LAKE_DATASET:-line_lake}"
+TOPIC="${LINE_EVENTS_TOPIC_NAME:-line-events}"
+DLQ="${TOPIC}-dlq"
+BQ_SUB="${TOPIC}-to-bq"
+WORKER_SUB="${TOPIC}-worker"
+BUCKET="${LINE_CONTENT_BUCKET:-${PROJECT}-line-content}"
+SERVICE="${AGENT_SERVICE:-jci-sed-agent}"
+PUSH_SA_ID="pubsub-push"
+PUSH_SA="${PUSH_SA_ID}@${PROJECT}.iam.gserviceaccount.com"
+RETENTION_DAYS="${LAKE_RETENTION_DAYS:-1825}"  # 生イベントの保存期間（既定5年）
+RUNTIME_SA="app-runtime@${PROJECT}.iam.gserviceaccount.com"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+PROJECT_NUMBER="$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')"
+PUBSUB_AGENT="service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com"
+
+echo ">> project=${PROJECT} dataset=${DATASET} topic=${TOPIC} retention=${RETENTION_DAYS}d"
+
+echo ">> API を有効化"
+gcloud services enable pubsub.googleapis.com bigquery.googleapis.com \
+  bigquerystorage.googleapis.com storage.googleapis.com iamcredentials.googleapis.com \
+  --project "${PROJECT}"
+
+# --------------------------------------------------------------------------- #
+# Pub/Sub トピック（7日保持＝障害時のリプレイ用）
+# --------------------------------------------------------------------------- #
+for t in "${TOPIC}" "${DLQ}"; do
+  if ! gcloud pubsub topics describe "${t}" --project "${PROJECT}" >/dev/null 2>&1; then
+    gcloud pubsub topics create "${t}" --message-retention-duration=7d --project "${PROJECT}"
+  else
+    echo "   既に存在: topic ${t}"
+  fi
+done
+# DLQ に落ちたメッセージを7日間保持して調査できるようにする
+if ! gcloud pubsub subscriptions describe "${DLQ}-hold" --project "${PROJECT}" >/dev/null 2>&1; then
+  gcloud pubsub subscriptions create "${DLQ}-hold" --topic "${DLQ}" \
+    --message-retention-duration=7d --expiration-period=never --project "${PROJECT}"
+fi
+
+# --------------------------------------------------------------------------- #
+# BigQuery: データセット・生テーブル・ビュー
+# --------------------------------------------------------------------------- #
+if ! bq --project_id="${PROJECT}" show --dataset "${PROJECT}:${DATASET}" >/dev/null 2>&1; then
+  bq --project_id="${PROJECT}" --location="${REGION}" mk --dataset \
+    --description "LINE メッセージのデータレイク（docs/datalake-design.md）" \
+    "${PROJECT}:${DATASET}"
+else
+  echo "   既に存在: dataset ${DATASET}"
+fi
+
+if ! bq --project_id="${PROJECT}" show "${PROJECT}:${DATASET}.events_raw" >/dev/null 2>&1; then
+  bq --project_id="${PROJECT}" --location="${REGION}" mk --table \
+    --schema "${ROOT}/infra/bigquery/events_raw.json" \
+    --time_partitioning_field publish_time \
+    --time_partitioning_type DAY \
+    --time_partitioning_expiration "$((RETENTION_DAYS * 86400))" \
+    --description "全 LINE イベントの生 JSON（Pub/Sub BigQuery サブスクリプションが書き込む）" \
+    "${PROJECT}:${DATASET}.events_raw"
+else
+  echo "   既に存在: table events_raw"
+fi
+
+echo ">> ビューを作成・更新"
+for f in "${ROOT}"/infra/bigquery/views/*.sql; do
+  # SQL は標準入力で渡す（引数で渡すと先頭のコメント "-- …" を bq がオプションと誤解する）
+  sed -e "s/\${PROJECT}/${PROJECT}/g" -e "s/\${DATASET}/${DATASET}/g" "${f}" \
+    | bq --project_id="${PROJECT}" --location="${REGION}" query --use_legacy_sql=false \
+      --quiet >/dev/null
+  echo "   $(basename "${f}")"
+done
+
+# --------------------------------------------------------------------------- #
+# 権限
+# --------------------------------------------------------------------------- #
+echo ">> 権限付与"
+# アプリ（Webhook）がトピックへ publish できる
+gcloud pubsub topics add-iam-policy-binding "${TOPIC}" \
+  --member "serviceAccount:${RUNTIME_SA}" --role roles/pubsub.publisher \
+  --project "${PROJECT}" >/dev/null
+# Pub/Sub が生テーブルへ書き込める（BigQuery サブスクリプション）。テーブル単位の最小権限
+bq --project_id="${PROJECT}" add-iam-policy-binding \
+  --member="serviceAccount:${PUBSUB_AGENT}" --role=roles/bigquery.dataEditor \
+  "${PROJECT}:${DATASET}.events_raw" >/dev/null
+# Pub/Sub が DLQ へ退避できる
+gcloud pubsub topics add-iam-policy-binding "${DLQ}" \
+  --member "serviceAccount:${PUBSUB_AGENT}" --role roles/pubsub.publisher \
+  --project "${PROJECT}" >/dev/null
+
+# --------------------------------------------------------------------------- #
+# BigQuery サブスクリプション（トピック → events_raw を直結）
+# --------------------------------------------------------------------------- #
+if ! gcloud pubsub subscriptions describe "${BQ_SUB}" --project "${PROJECT}" >/dev/null 2>&1; then
+  gcloud pubsub subscriptions create "${BQ_SUB}" \
+    --topic "${TOPIC}" \
+    --bigquery-table "${PROJECT}:${DATASET}.events_raw" \
+    --write-metadata \
+    --dead-letter-topic "${DLQ}" \
+    --max-delivery-attempts 5 \
+    --expiration-period=never \
+    --project "${PROJECT}"
+else
+  echo "   既に存在: subscription ${BQ_SUB}"
+fi
+gcloud pubsub subscriptions add-iam-policy-binding "${BQ_SUB}" \
+  --member "serviceAccount:${PUBSUB_AGENT}" --role roles/pubsub.subscriber \
+  --project "${PROJECT}" >/dev/null
+
+# --------------------------------------------------------------------------- #
+# ファイル置き場（Cloud Storage）: 公開禁止・均一アクセス・保管クラスの自動移行
+# --------------------------------------------------------------------------- #
+if ! gcloud storage buckets describe "gs://${BUCKET}" --project "${PROJECT}" >/dev/null 2>&1; then
+  gcloud storage buckets create "gs://${BUCKET}" --project "${PROJECT}" --location "${REGION}" \
+    --uniform-bucket-level-access --public-access-prevention
+else
+  echo "   既に存在: bucket ${BUCKET}"
+fi
+LIFECYCLE="$(mktemp)"
+trap 'rm -f "${LIFECYCLE}"' EXIT
+cat > "${LIFECYCLE}" <<JSON
+{"rule": [
+  {"action": {"type": "SetStorageClass", "storageClass": "NEARLINE"},
+   "condition": {"age": 90, "matchesStorageClass": ["STANDARD"]}},
+  {"action": {"type": "SetStorageClass", "storageClass": "COLDLINE"},
+   "condition": {"age": 365, "matchesStorageClass": ["NEARLINE"]}},
+  {"action": {"type": "Delete"}, "condition": {"age": ${RETENTION_DAYS}}}
+]}
+JSON
+gcloud storage buckets update "gs://${BUCKET}" --lifecycle-file="${LIFECYCLE}" \
+  --project "${PROJECT}" >/dev/null
+gcloud storage buckets add-iam-policy-binding "gs://${BUCKET}" \
+  --member "serviceAccount:${RUNTIME_SA}" --role roles/storage.objectAdmin \
+  --project "${PROJECT}" >/dev/null
+
+# --------------------------------------------------------------------------- #
+# ワーカー: 送信取消の本文消去（tick）用の BigQuery 権限
+# --------------------------------------------------------------------------- #
+bq --project_id="${PROJECT}" add-iam-policy-binding \
+  --member="serviceAccount:${RUNTIME_SA}" --role=roles/bigquery.dataEditor \
+  "${PROJECT}:${DATASET}.events_raw" >/dev/null
+gcloud projects add-iam-policy-binding "${PROJECT}" \
+  --member "serviceAccount:${RUNTIME_SA}" --role roles/bigquery.jobUser \
+  --condition=None --quiet >/dev/null
+# 管理画面「LINEグループ」がビューを読める（ビュー単位の最小権限）
+for f in "${ROOT}"/infra/bigquery/views/*.sql; do
+  view="$(sed -n 's/.*\.\(v_[a-z_]*\)`.*/\1/p' "${f}" | head -1)"
+  bq --project_id="${PROJECT}" add-iam-policy-binding \
+    --member="serviceAccount:${RUNTIME_SA}" --role=roles/bigquery.dataViewer \
+    "${PROJECT}:${DATASET}.${view}" >/dev/null
+done
+
+# --------------------------------------------------------------------------- #
+# Push の認証用 SA（Pub/Sub がこの SA の OIDC トークンを付けてワーカーを呼ぶ）
+# --------------------------------------------------------------------------- #
+if ! gcloud iam service-accounts describe "${PUSH_SA}" --project "${PROJECT}" >/dev/null 2>&1; then
+  gcloud iam service-accounts create "${PUSH_SA_ID}" \
+    --display-name "Pub/Sub push (OIDC token issuer)" --project "${PROJECT}"
+fi
+gcloud iam service-accounts add-iam-policy-binding "${PUSH_SA}" \
+  --member "serviceAccount:${PUBSUB_AGENT}" --role roles/iam.serviceAccountTokenCreator \
+  --project "${PROJECT}" >/dev/null
+
+# --------------------------------------------------------------------------- #
+# ワーカーの設定（Push サブスクリプションより先に入れる。未設定の間は 503 で再送させる）
+# --------------------------------------------------------------------------- #
+AGENT_URL="$(gcloud run services describe "${SERVICE}" --region "${REGION}" \
+  --project "${PROJECT}" --format='value(status.url)')"
+ENDPOINT="${AGENT_URL}/pubsub/line-worker"
+echo ">> ${SERVICE} にワーカー設定を反映（既存の環境変数は保持）"
+gcloud run services update "${SERVICE}" --region "${REGION}" --project "${PROJECT}" \
+  --update-env-vars "LINE_CONTENT_BUCKET=${BUCKET},PUBSUB_PUSH_SA=${PUSH_SA},PUBSUB_PUSH_AUDIENCE=${ENDPOINT}" \
+  --quiet >/dev/null
+
+if ! gcloud pubsub subscriptions describe "${WORKER_SUB}" --project "${PROJECT}" >/dev/null 2>&1; then
+  gcloud pubsub subscriptions create "${WORKER_SUB}" \
+    --topic "${TOPIC}" \
+    --message-filter 'attributes.kind = "webhook"' \
+    --push-endpoint "${ENDPOINT}" \
+    --push-auth-service-account "${PUSH_SA}" \
+    --push-auth-token-audience "${ENDPOINT}" \
+    --ack-deadline 120 \
+    --min-retry-delay 10s --max-retry-delay 600s \
+    --dead-letter-topic "${DLQ}" --max-delivery-attempts 5 \
+    --expiration-period=never \
+    --project "${PROJECT}"
+else
+  echo "   既に存在: subscription ${WORKER_SUB}"
+fi
+gcloud pubsub subscriptions add-iam-policy-binding "${WORKER_SUB}" \
+  --member "serviceAccount:${PUBSUB_AGENT}" --role roles/pubsub.subscriber \
+  --project "${PROJECT}" >/dev/null
+
+cat <<EOF
+
+データレイクの準備が完了しました（ファイル置き場: gs://${BUCKET}）。
+
+最後に、取込を開始します（各グループへの周知のあとに実行。既存の設定は保持されます）。
+受信イベントは agent、管理画面から送るお知らせ等の記録と閲覧は admin で使うため両方に設定します:
+
+  gcloud run services update jci-sed-agent --region ${REGION} --project ${PROJECT} \\
+    --update-env-vars LINE_EVENTS_TOPIC=${TOPIC}
+  gcloud run services update jci-sed-admin --region ${REGION} --project ${PROJECT} \\
+    --update-env-vars LINE_EVENTS_TOPIC=${TOPIC}
+
+確認（数分後）:
+  bq query --use_legacy_sql=false \\
+    'SELECT sent_at, source_type, message_type, text FROM \`${PROJECT}.${DATASET}.v_messages\` ORDER BY sent_at DESC LIMIT 20'
+
+※ 取込開始前に、各グループへ周知文（docs/datalake-design.md §7）を投稿してください。
+EOF

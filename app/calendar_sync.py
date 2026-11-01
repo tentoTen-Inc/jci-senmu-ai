@@ -1,0 +1,218 @@
+"""イベント → Googleカレンダーの反映（F3-2 / docs/calendar-design.md §4.1）。
+
+- 反映は保存の直後に同期実行する。失敗してもイベント保存は成功させ、
+  `gcal_sync_state=error` を残して tick（`retry_pending`）で再試行する。
+- カレンダー側の予定には `extendedProperties.private.jci_event_id` を刻み、
+  カレンダーから取り込むとき（P5-2）にリンク済みかどうかを判定できるようにする。
+- すべての予定に Meet を付け、自動録画をオンにする（§4.5。現地かオンラインかを分けない）。
+  Meet が付いていない今後の予定は tick（`retry_pending`）で付け直す。
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta
+
+from . import gcal, lom
+from .jpdate import JST
+from .models import Event, EventStatus, GcalSyncState, TargetScopeKind
+from .repository import Repository
+
+logger = logging.getLogger("jci-agent.calendar_sync")
+
+DEFAULT_DURATION = timedelta(hours=2)
+#: カレンダー予定の中身に影響するイベント項目（これ以外の変更では API を呼ばない）
+CALENDAR_FIELDS = frozenset({
+    "type", "title", "datetime_start", "datetime_end", "location", "fiscal_year",
+    "attendance_deadline", "material_deadline", "target_scope", "status",
+})
+LINK_KEY = "jci_event_id"
+#: 1回の tick で Meet を付け直す予定の数（導入時に今後の予定がまとめて対象になるため）
+MEET_BACKFILL_PER_TICK = 20
+
+
+
+def managed_note() -> str:
+    return f"※ {lom.lom_short_name()}の{lom.bot_name()}が管理する予定です。"
+
+def _fmt(dt: datetime) -> str:
+    return dt.strftime("%-m/%-d %H:%M")
+
+
+def _calendar_time(dt: datetime) -> dict:
+    """Calendar API の dateTime。naive は JST とみなす。"""
+    local = dt.replace(tzinfo=JST) if dt.tzinfo is None else dt.astimezone(JST)
+    return {"dateTime": local.isoformat(), "timeZone": gcal.TIMEZONE}
+
+
+def _fiscal_prefix(event: Event) -> str:
+    """翌年度の予定なら年度の下2桁（2027年度 → "27"）。それ以外は空。"""
+    fy = event.fiscal_year
+    return f"{fy % 100:02d}" if fy and fy > event.datetime_start.year else ""
+
+
+def calendar_title(event: Event) -> str:
+    """「【理事会】第8回理事会」。種別とタイトルが同じなら前置しない。
+
+    翌年度の予定は年度を前置する（「27【対外】青木一/江口隆 第2回次年度会員会議所会議」）。
+    命名規則は docs/calendar-design.md §4.4。
+    """
+    kind = str(event.type)
+    prefix = _fiscal_prefix(event)
+    if event.title.startswith(f"【{kind}】"):
+        return prefix + event.title
+    if event.title.strip() == kind:
+        # 年度を付けるときは「27例会」だと種別として読み戻せないので括弧を残す
+        return f"{prefix}【{kind}】" if prefix else event.title
+    return f"{prefix}【{kind}】{event.title}"
+
+
+def _scope_names(event: Event, repo: Repository | None) -> list[str]:
+    """対象の表示名。任意指定（custom）は会員IDなので氏名に直す（見つからなければIDのまま）。"""
+    values = event.target_scope.value
+    if event.target_scope.kind != TargetScopeKind.custom or repo is None:
+        return list(values)
+    names = []
+    for member_id in values:
+        member = repo.get_member(member_id)
+        names.append(member.name if member else member_id)
+    return names
+
+
+def _description(event: Event, repo: Repository | None = None) -> str:
+    lines = []
+    if event.attendance_deadline:
+        lines.append(f"出欠締切: {_fmt(event.attendance_deadline)}")
+    if event.material_deadline:
+        lines.append(f"資料締切: {_fmt(event.material_deadline)}")
+    scope = event.target_scope
+    if scope.kind != "all" and scope.value:
+        lines.append(f"対象: {'・'.join(_scope_names(event, repo))}")
+    else:
+        lines.append("対象: 全員")
+    lines.append("")
+    lines.append(managed_note())
+    return "\n".join(lines)
+
+
+def to_calendar_body(event: Event, repo: Repository | None = None, *,
+                     new_meet: bool | None = None) -> dict:
+    """イベントをカレンダー予定（events リソース）に変換する。repo は対象の氏名解決に使う。
+
+    Meet がまだ無い（`new_meet` 省略時は `meet_url` が空）なら会議の作成を頼む。
+    requestId はイベントごとに固定なので、同じ依頼を繰り返しても会議は増えない。
+    """
+    end = event.datetime_end or (event.datetime_start + DEFAULT_DURATION)
+    body = {
+        "summary": calendar_title(event),
+        "location": event.location or "",
+        "description": _description(event, repo),
+        "start": _calendar_time(event.datetime_start),
+        "end": _calendar_time(end),
+        "extendedProperties": {"private": {LINK_KEY: event.event_id}},
+    }
+    if new_meet if new_meet is not None else not event.meet_url:
+        body["conferenceData"] = {"createRequest": {
+            "requestId": f"meet-{event.event_id}",
+            "conferenceSolutionKey": {"type": "hangoutsMeet"}}}
+    return body
+
+
+def _with_meet(event: Event, res: dict) -> Event:
+    """カレンダーの応答から Meet を読み取り、まだなら自動録画をオンにする。
+
+    自動録画に失敗しても予定の反映は成功のまま（次の tick でまた試す）。
+    """
+    url = res.get("hangoutLink")
+    code = (res.get("conferenceData") or {}).get("conferenceId")
+    if not url:
+        return event
+    auto = event.meet_auto_record and url == event.meet_url
+    if not auto and code:
+        try:
+            gcal.enable_auto_recording(code)
+            auto = True
+        except Exception as exc:  # noqa: BLE001 - 録画の設定失敗で予定の反映を止めない
+            logger.warning("Meet の自動録画を設定できません: event=%s err=%s", event.event_id, exc)
+    return event.model_copy(update={"meet_url": url, "meet_auto_record": auto})
+
+
+def touches_calendar(changed_fields: set[str]) -> bool:
+    """更新項目にカレンダーへ影響するものが含まれるか。"""
+    return bool(changed_fields & CALENDAR_FIELDS)
+
+
+def _mark(event: Event, state: GcalSyncState, *, error: str | None = None) -> Event:
+    update: dict = {"gcal_sync_state": state, "gcal_error": error}
+    if state == GcalSyncState.synced:
+        update["gcal_synced_at"] = datetime.now()
+    return event.model_copy(update=update)
+
+
+def push_event(repo: Repository, event: Event) -> Event:
+    """イベントの現在の状態をカレンダーへ反映し、同期状態を保存して返す。
+
+    - 中止（cancelled）: カレンダー予定を削除しリンクを外す。
+    - それ以外: 未リンクなら作成、リンク済みなら更新。
+    失敗しても例外は投げず、`gcal_sync_state=error` で保存する。
+    """
+    if not gcal.is_configured():
+        synced = _mark(event, GcalSyncState.disabled)
+        repo.upsert_event(synced)
+        return synced
+
+    try:
+        if event.status == EventStatus.cancelled:
+            if event.gcal_event_id:
+                gcal.delete_event(event.gcal_event_id)
+            synced = event.model_copy(update={"gcal_event_id": None, "gcal_etag": None,
+                                              "meet_url": None, "meet_auto_record": False})
+        elif event.gcal_event_id:
+            try:
+                res = gcal.patch_event(event.gcal_event_id, to_calendar_body(event, repo))
+            except gcal.GcalError as exc:
+                if exc.status not in (404, 410):
+                    raise
+                # カレンダー側で消えていた → 作り直す（Meet も新しく作る）
+                res = gcal.insert_event(to_calendar_body(event, repo, new_meet=True))
+            synced = _with_meet(event.model_copy(
+                update={"gcal_event_id": res.get("id"), "gcal_etag": res.get("etag")}
+            ), res)
+        else:
+            res = gcal.insert_event(to_calendar_body(event, repo, new_meet=True))
+            synced = _with_meet(event.model_copy(
+                update={"gcal_event_id": res.get("id"), "gcal_etag": res.get("etag")}
+            ), res)
+        synced = _mark(synced, GcalSyncState.synced)
+    except Exception as exc:  # noqa: BLE001 - 同期失敗でイベント保存を止めない
+        logger.warning("カレンダー反映に失敗: event=%s err=%s", event.event_id, exc)
+        synced = _mark(event, GcalSyncState.error, error=str(exc)[:300])
+
+    repo.upsert_event(synced)
+    return synced
+
+
+def retry_pending(repo: Repository, now: datetime) -> dict | None:
+    """未反映（pending/error）のイベントと、Meet・自動録画がまだの予定を反映する（tick から呼ぶ）。
+
+    過去に終わったイベントは対象外（今さらカレンダーを直しても意味が薄く、API を浪費するため）。
+    """
+    if not gcal.is_configured():
+        return None
+    upcoming = [e for e in repo.list_events()
+                if (e.datetime_end or e.datetime_start) >= now - timedelta(days=1)]
+    unsynced = [e for e in upcoming
+                if e.gcal_sync_state in (GcalSyncState.pending, GcalSyncState.error,
+                                         GcalSyncState.disabled)]
+    no_meet = [e for e in sorted(upcoming, key=lambda e: e.datetime_start)
+               if e.event_id not in {u.event_id for u in unsynced}
+               and e.status != EventStatus.cancelled
+               and not (e.meet_url and e.meet_auto_record)]
+    targets = unsynced + no_meet[:MEET_BACKFILL_PER_TICK]
+    ok = failed = 0
+    for event in targets:
+        result = push_event(repo, event)
+        if result.gcal_sync_state == GcalSyncState.synced:
+            ok += 1
+        else:
+            failed += 1
+    return {"retried": len(targets), "synced": ok, "failed": failed}

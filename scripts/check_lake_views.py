@@ -1,0 +1,139 @@
+"""データレイクのビューSQLを、サンプルイベントで BigQuery 上で検証する（開発用）。
+
+`infra/bigquery/views/*.sql` の `events_raw` をリテラルの CTE に差し替えた1本のクエリを作る。
+データセットが無くても実行でき、読むのはリテラルだけなので課金も発生しない。
+ビューを追加・変更したら、セットアップ前にこれで構文と結果を確認する。
+
+使い方（リポジトリ直下・direnv 有効な状態で）:
+  .venv/bin/python scripts/check_lake_views.py v_messages          # SQL を表示
+  .venv/bin/python scripts/check_lake_views.py v_messages --run    # bq で実行して結果を表示
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+VIEWS = sorted((ROOT / "infra" / "bigquery" / "views").glob("*.sql"))
+PROJECT = os.environ.get("GCP_PROJECT_ID") or sys.exit("GCP_PROJECT_ID を設定してください")
+REGION = "asia-northeast1"
+
+_SOURCE = {"type": "group", "groupId": "G1", "userId": "U1"}
+
+
+def _webhook(eid: str, payload: dict) -> dict:
+    payload = {"webhookEventId": eid, "source": _SOURCE, **payload}
+    return {"v": 1, "id": eid, "kind": "webhook", "destination": "Ubot",
+            "received_at": "2026-10-06T12:00:00.000+09:00", "payload": payload}
+
+
+#: ビューの挙動を一通り通すサンプル（重複・メンション・ファイル・送信取消・参加・グループ名）
+SAMPLES = [
+    _webhook("e1", {"type": "message", "timestamp": 1791241200000, "replyToken": "rt1",
+                    "deliveryContext": {"isRedelivery": False},
+                    "message": {"type": "text", "id": "m1", "text": "おはようございます",
+                                "mention": {"mentionees": [{"index": 0, "length": 3,
+                                                            "type": "user", "isSelf": True}]}}}),
+    _webhook("e1", {"type": "message", "timestamp": 1791241200000,
+                    "message": {"type": "text", "id": "m1", "text": "重複配信"}}),
+    _webhook("e2", {"type": "message", "timestamp": 1791241260000,
+                    "message": {"type": "file", "id": "m2", "fileName": "議案.pdf",
+                                "fileSize": 12345}}),
+    _webhook("e3", {"type": "unsend", "timestamp": 1791241300000, "unsend": {"messageId": "m2"}}),
+    _webhook("e4", {"type": "join", "timestamp": 1791241000000,
+                    "source": {"type": "group", "groupId": "G1"}}),
+    {"v": 1, "id": "gp1", "kind": "group_profile", "received_at": "2026-10-06T12:05:00.000+09:00",
+     "payload": {"groupId": "G1", "groupName": "サンプルJC 理事会", "pictureUrl": "https://x"}},
+    {"v": 1, "id": "content_m2_stored", "kind": "content",
+     "received_at": "2026-10-06T12:01:05.000+09:00",
+     "payload": {"message_id": "m2", "status": "stored", "source_type": "group",
+                 "group_id": "G1", "user_id": "U1", "sent_at_ms": 1791241260000,
+                 "file_name": "議案.pdf", "content_type": "application/pdf", "size": 12345,
+                 "sha256": "ab", "gcs_uri": "gs://b/line/content/m2/議案.pdf",
+                 "text": "第1号議案"}},
+    {"v": 1, "id": "content_m2_deleted_unsent", "kind": "content",
+     "received_at": "2026-10-06T12:02:00.000+09:00",
+     "payload": {"message_id": "m2", "status": "deleted_unsent", "source_type": "group",
+                 "group_id": "G1", "user_id": "U1", "sent_at_ms": 1791241260000}},
+    {"v": 1, "id": "content_m3_stored", "kind": "content",
+     "received_at": "2026-10-06T12:03:00.000+09:00",
+     "payload": {"message_id": "m3", "status": "stored", "source_type": "group",
+                 "group_id": "G1", "user_id": "U2", "sent_at_ms": 1791241320000,
+                 "file_name": "m3.jpg", "content_type": "image/jpeg", "size": 2048,
+                 "gcs_uri": "gs://b/line/content/m3/m3.jpg"}},
+    {"v": 1, "id": "out1", "kind": "outbound", "received_at": "2026-10-06T12:00:01.000+09:00",
+     "payload": {"channel": "reply", "reply_token": "rt1", "to": None,
+                 "messages": [{"type": "text", "text": "おはようございます！"}]}},
+    {"v": 1, "id": "out2", "kind": "outbound", "received_at": "2026-10-06T18:00:00.000+09:00",
+     "payload": {"channel": "push", "reply_token": None, "to": "U9",
+                 "messages": [{"type": "text", "text": "出欠のご回答をお願いします"}]}},
+    {"v": 1, "id": "ans_1", "kind": "ai_answer", "received_at": "2026-10-06T21:40:00.000+09:00",
+     "payload": {"answer_id": "ans_1", "member_id": "sed", "user_id": "U1",
+                 "question": "福島ブロックの予定を教えて",
+                 "answer": "資料によると10月8日に引継ぎがあります[1]。",
+                 "sources": [{"chunk_id": "file:m2:0", "title": "議案.pdf", "distance": 0.2}],
+                 "grounded": True, "needs_human": False, "model": "gemini-2.5-pro",
+                 "input_tokens": 1200, "output_tokens": 80}},
+    {"v": 1, "id": "ans_2", "kind": "ai_answer", "received_at": "2026-10-06T21:45:00.000+09:00",
+     "payload": {"answer_id": "ans_2", "member_id": "sed", "user_id": "U1",
+                 "question": "会費はいくら？", "answer": "分かりかねます。", "sources": [],
+                 "grounded": False, "needs_human": True, "model": "gemini-2.5-pro"}},
+    {"v": 1, "id": "fb1", "kind": "ai_feedback", "received_at": "2026-10-06T21:41:00.000+09:00",
+     "payload": {"answer_id": "ans_1", "rating": "down"}},
+    {"v": 1, "id": "fb2", "kind": "ai_feedback", "received_at": "2026-10-06T21:42:00.000+09:00",
+     "payload": {"answer_id": "ans_1", "rating": "up"}},
+]
+
+
+def _view_name(sql: str) -> str:
+    return re.search(r"\.(v_\w+)`", sql).group(1)
+
+
+def _body(sql: str) -> str:
+    sql = re.sub(r"^--.*$", "", sql, flags=re.M)
+    sql = re.sub(r"CREATE OR REPLACE VIEW `[^`]+` AS", "", sql)
+    return re.sub(r"`\$\{PROJECT\}\.\$\{DATASET\}\.(\w+)`", r"\1", sql).strip()
+
+
+def _row(i: int, env: dict) -> str:
+    data = json.dumps(env, ensure_ascii=False).replace("'", "\\'")
+    return (f"SELECT 'sub' AS subscription_name, 'm{i}' AS message_id, "
+            f"TIMESTAMP_ADD(TIMESTAMP '2026-10-06 03:00:00+00', INTERVAL {i} SECOND) "
+            f"AS publish_time, PARSE_JSON('{data}') AS data, JSON '{{}}' AS attributes")
+
+
+def build_query(target: str, samples: list[dict] = SAMPLES) -> str:
+    ctes = ["events_raw AS (" + " UNION ALL ".join(_row(i, e) for i, e in enumerate(samples))
+            + ")"]
+    for path in VIEWS:
+        sql = path.read_text()
+        name = _view_name(sql)
+        ctes.append(f"{name} AS (\n{_body(sql)}\n)")
+        if name == target:
+            return "WITH " + ",\n".join(ctes) + f"\nSELECT * FROM {target}"
+    raise SystemExit(f"ビューが見つかりません: {target}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("view", help="v_messages など")
+    parser.add_argument("--run", action="store_true", help="bq で実行する")
+    args = parser.parse_args()
+    query = build_query(args.view)
+    if not args.run:
+        print(query)
+        return 0
+    return subprocess.run(
+        ["bq", f"--project_id={PROJECT}", f"--location={REGION}", "query",
+         "--use_legacy_sql=false", "--format=pretty", "--max_rows=50"],
+        input=query, text=True, check=False,
+    ).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

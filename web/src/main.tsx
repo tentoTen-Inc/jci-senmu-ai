@@ -1,0 +1,52 @@
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import "./index.css";
+import App from "./App";
+import { UiProvider } from "./components/ui";
+import RouteError from "./components/RouteError";
+import Home from "./pages/Home";
+import Members from "./pages/Members";
+import Events from "./pages/Events";
+import Polls from "./pages/Polls";
+import Proposals from "./pages/Proposals";
+import Notices from "./pages/Notices";
+import Surveys from "./pages/Surveys";
+import LineGroups from "./pages/LineGroups";
+import AiAnswers from "./pages/AiAnswers";
+import Agent from "./pages/Agent";
+import SettingsPage from "./pages/Settings";
+import FeedbackPage from "./pages/Feedback";
+
+const router = createBrowserRouter(
+  [
+    {
+      path: "/",
+      element: <App />,
+      errorElement: <RouteError />,
+      children: [
+        { index: true, element: <Home /> },
+        { path: "members", element: <Members /> },
+        { path: "events", element: <Events /> },
+        { path: "polls", element: <Polls /> },
+        { path: "proposals", element: <Proposals /> },
+        { path: "notices", element: <Notices /> },
+        { path: "surveys", element: <Surveys /> },
+        { path: "line-groups", element: <LineGroups /> },
+        { path: "ai-answers", element: <AiAnswers /> },
+        { path: "agent", element: <Agent /> },
+        { path: "settings", element: <SettingsPage /> },
+        { path: "feedback", element: <FeedbackPage /> },
+      ],
+    },
+  ],
+  { basename: "/app" }
+);
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <UiProvider>
+      <RouterProvider router={router} />
+    </UiProvider>
+  </React.StrictMode>
+);

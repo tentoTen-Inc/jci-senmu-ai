@@ -1,0 +1,9 @@
+fastapi==0.128.8
+# FastAPI が許す範囲で、既知の脆弱性（CVE-2025-54121 multipart・CVE-2025-62727 Range ヘッダ）が
+# 直った版を明示する。Starlette 1.x（FastAPI 0.15x 以降）への更新は、変更点が多いので別に行う
+starlette==0.52.1
+uvicorn[standard]==0.34.0
+line-bot-sdk==3.14.2
+google-cloud-firestore==2.19.0
+google-cloud-secret-manager==2.21.1
+pypdf==6.14.2

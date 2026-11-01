@@ -1,0 +1,34 @@
+# Secrets / environment
+.env
+.env.local
+*.local
+
+# Service account / credentials
+*-key.json
+service-account*.json
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / SPA
+node_modules/
+web/node_modules/
+web/dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# ローカルの git worktree 置き場
+.worktrees/
+
+# 実データ（名簿など個人情報。コミットしない）
+data/
+
+# OAuth クライアントの鍵（scripts/gmail_oauth_setup.py で使う。中身は Secret Manager に登録済み）
+client_secret*.json

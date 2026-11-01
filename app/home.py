@@ -1,0 +1,159 @@
+"""ホーム画面の集約データ（docs/dashboard-design.md §3.1）。"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from pydantic import BaseModel
+
+from .attendance import aggregate
+from .calendar_sync import calendar_title
+from .models import (
+    DeliveryResult,
+    EventStatus,
+    FeedbackStatus,
+    LinkRequestStatus,
+    MemberStatus,
+    PollStatus,
+)
+from .notice_actions import open_action_count
+from .repository import Repository
+
+AGENDA_DAYS = 14  # ホームの「今後の予定」の範囲
+
+
+class EventBrief(BaseModel):
+    event_id: str
+    title: str
+    datetime_start: datetime
+    location: str | None
+    total_targets: int
+    answered: int
+    attendance_rate: float
+    unanswered: int
+
+
+class ActionRequired(BaseModel):
+    unlinked_members: int
+    open_escalations: int
+    unanswered_total: int
+    open_notice_actions: int = 0  # 未対応者が残る対外連絡アクション（F5-5）
+    link_requests: int = 0  # LINE 連携の承認待ち（docs/line-link-design.md）
+    new_feedback: int = 0  # 意見箱の新規（docs/feedback-box-design.md）
+
+
+class AgendaItem(BaseModel):
+    """今後の予定（下書きも含む。中止は除く）。"""
+
+    event_id: str
+    title: str  # カレンダーと同じ表記（27【対外】…）
+    type: str
+    status: str
+    datetime_start: datetime
+    location: str | None
+
+
+class PollBrief(BaseModel):
+    poll_id: str
+    title: str
+    answered: int
+    targets: int
+    deadline: datetime | None
+    leading: str | None  # いま ○ が最も多い候補（同数は先の日付）
+
+
+class HomeData(BaseModel):
+    generated_at: datetime
+    kill_switch: bool
+    delivery_success_rate: float
+    member_count: int
+    action_required: ActionRequired
+    upcoming_events: list[EventBrief]
+    this_week: list[EventBrief]
+    agenda: list[AgendaItem] = []
+    polls: list[PollBrief] = []
+
+
+def _brief(repo: Repository, event) -> EventBrief:
+    s = aggregate(repo, event.event_id)
+    return EventBrief(
+        event_id=event.event_id,
+        title=event.title,
+        datetime_start=event.datetime_start,
+        location=event.location,
+        total_targets=s.total_targets,
+        answered=s.answered,
+        attendance_rate=s.attendance_rate,
+        unanswered=s.unanswered,
+    )
+
+
+def build_home(repo: Repository, *, now: datetime) -> HomeData:
+    settings = repo.get_settings()
+
+    # 配信成功率
+    logs = repo.list_delivery_logs()
+    ok = sum(1 for x in logs if x.result == DeliveryResult.ok)
+    failed = sum(1 for x in logs if x.result == DeliveryResult.failed)
+    success_rate = round(ok / (ok + failed), 3) if (ok + failed) else 1.0
+
+    members = repo.list_members()
+    active = [m for m in members if m.status == MemberStatus.active]
+    unlinked = sum(1 for m in active if m.line_user_id is None)
+
+    open_events = [e for e in repo.list_events(status=EventStatus.open)]
+    future = sorted(
+        (e for e in open_events if e.datetime_start >= now),
+        key=lambda e: e.datetime_start,
+    )
+    briefs = [_brief(repo, e) for e in future]
+    unanswered_total = sum(b.unanswered for b in briefs)
+
+    week_end = now + timedelta(days=7)
+    this_week = [b for b in briefs if b.datetime_start <= week_end]
+
+    agenda_end = now + timedelta(days=AGENDA_DAYS)
+    agenda = [
+        AgendaItem(event_id=e.event_id, title=calendar_title(e), type=str(e.type),
+                   status=e.status.value, datetime_start=e.datetime_start, location=e.location)
+        for e in sorted(repo.list_events(), key=lambda e: e.datetime_start)
+        if e.status != EventStatus.cancelled and now <= e.datetime_start <= agenda_end
+    ]
+
+    return HomeData(
+        generated_at=now,
+        kill_switch=settings.kill_switch,
+        delivery_success_rate=success_rate,
+        member_count=len(active),
+        action_required=ActionRequired(
+            unlinked_members=unlinked,
+            open_escalations=len(repo.list_escalations(status="open")),
+            unanswered_total=unanswered_total,
+            open_notice_actions=open_action_count(repo),
+            link_requests=sum(1 for r in repo.list_link_requests()
+                              if r.status == LinkRequestStatus.pending),
+            new_feedback=sum(1 for f in repo.list_feedback() if f.status == FeedbackStatus.new),
+        ),
+        upcoming_events=briefs[:5],
+        this_week=this_week,
+        agenda=agenda,
+        polls=[_poll_brief(repo, p) for p in repo.list_polls() if p.status == PollStatus.open],
+    )
+
+
+def _poll_brief(repo: Repository, poll) -> PollBrief:
+    from .schedule_poll import candidate_label, summary  # 循環 import を避ける
+
+    data = summary(repo, poll)
+    counts = data["counts"]
+    leading = None
+    if any(c["ok"] for c in counts.values()):
+        # ○が多い → ×が少ない → △が多い → 日付が早い（日程調整の画面と同じ順）
+        def score(c):
+            n = counts.get(c.candidate_id, {"ok": 0, "maybe": 0, "ng": 0})
+            return (n["ok"], -n["ng"], n["maybe"], -c.start.timestamp())
+
+        best = max(poll.candidates, key=score)
+        leading = candidate_label(best.start, best.end)
+    return PollBrief(poll_id=poll.poll_id, title=poll.title,
+                     answered=len(data["rows"]) - len(data["pending"]),
+                     targets=len(data["rows"]), deadline=poll.deadline, leading=leading)

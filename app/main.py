@@ -1,0 +1,707 @@
+"""JCI 専務理事エージェント — M0: LINE Webhook 疎通 PoC.
+
+エンドポイント:
+- GET  /              : 稼働確認
+- GET  /healthz       : ヘルスチェック（Cloud Run用）
+- POST /line/webhook  : LINE Messaging API の Webhook 受信
+    - 署名検証（channel secret）
+    - follow（友だち追加）→ 歓迎メッセージ
+    - message（テキスト）→ オウム返し（疎通確認用）
+
+設計方針:
+- シークレットは関数経由で遅延解決（テスト時に環境変数で差し替え可能）。
+- チャネルアクセストークン未設定でも Webhook は 200 を返し受信ログを残す（返信のみスキップ）。
+"""
+import hmac
+import logging
+import os
+import urllib.parse
+from datetime import datetime
+
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from linebot.v3 import WebhookParser
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import (
+    ApiClient,
+    Configuration,
+    Message,
+    MessagingApi,
+    ReplyMessageRequest,
+    ShowLoadingAnimationRequest,
+    TextMessage,
+)
+from linebot.v3.webhooks import (
+    Event,
+    FollowEvent,
+    MessageEvent,
+    PostbackEvent,
+    TextMessageContent,
+)
+from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from . import (
+    ai_feedback,
+    config,
+    doc_links,
+    doc_session,
+    drive_knowledge,
+    feedback_box,
+    file_links,
+    gmail,
+    iap,
+    lake,
+    line_link,
+    line_push,
+    line_worker,
+    lom,
+    proposal_submit,
+    proposal_sync,
+    rich_menu_link,
+)
+from . import lake_api as lake_api_module
+from .admin_api import router as admin_router
+from .assistant import ACTION_ESCALATE, handle_escalate_postback
+from .calendar_import import pull_changes
+from .calendar_intent import ACTION_CAL, handle_calendar_postback
+from .calendar_sync import retry_pending
+from .delivery import execute_delivery
+from .deps import get_repo
+from .feedback_api import router as feedback_router
+from .gmail_import import import_gmail_notices
+from .invite import verify_and_link
+from .lake_api import router as lake_router
+from .lake_knowledge import index_knowledge
+from .lake_maintenance import redact_unsent
+from .liff_api import router as liff_menu_router
+from .line_messages import apply_postback, build_attendance_request
+from .link_api import public_router as liff_link_router
+from .link_api import router as link_router
+from .logging_setup import configure_logging
+from .member_menu import build_menu, handle_member_text
+from .notice_actions import ACTION_NOTICE_DONE, handle_done_postback
+from .notices_api import router as notices_router
+from .polls_api import public_router as liff_router
+from .polls_api import router as polls_router
+from .proposal_intent import (
+    ACTION_CREATE,
+    ACTION_NEW,
+    handle_new_plan_postback,
+    handle_proposal_create_postback,
+)
+from .proposals_api import router as proposals_router
+from .reminders import plan_reminders
+from .surveys_api import router as surveys_router
+
+configure_logging()
+logger = logging.getLogger("jci-agent")
+
+app = FastAPI(title="JCI SED Agent", version="0.1.0")
+
+# /admin・/api・/tasks は非公開。/line/webhook(署名検証)・/・/health のみ公開。
+PROTECTED_PREFIXES = ("/admin", "/api", "/tasks")
+
+
+def _is_authorized(request: Request) -> bool:
+    # IAP 経由（Cloud Run 前段で認証済み）。IAP で守られた管理サービスでだけ、IAP が署名した
+    # JWT を検証して通す。公開サービスでは誰でも IAP のヘッダを付けられ、管理 API に入れて
+    # しまっていた（2026-10-12 修正）。メールのヘッダは検証したものに置き換える（監査の actor）。
+    if config.behind_iap():
+        email = iap.verified_email(request.headers.get(iap.JWT_HEADER))
+        if email:
+            _set_header(request, iap.EMAIL_HEADER, f"accounts.google.com:{email}")
+            return True
+    # 共有シークレット。Cloud Run は Authorization: Bearer を IAM 認証として横取りする
+    # ため、独自ヘッダ X-Admin-Token を用いる（Cloud Scheduler/管理ツール向け）。
+    secret = config.admin_api_secret()
+    token = request.headers.get("X-Admin-Token")
+    return bool(secret and token and hmac.compare_digest(token, secret))
+
+
+def _set_header(request: Request, name: str, value: str) -> None:
+    """後段（各 API）に渡すヘッダを置き換える。偽装された同名のヘッダは捨てる。"""
+    key = name.lower().encode()
+    headers = [(k, v) for k, v in request.scope["headers"] if k != key]
+    request.scope["headers"] = [*headers, (key, value.encode())]
+
+
+@app.middleware("http")
+async def access_guard(request: Request, call_next):
+    path = request.url.path
+    if path.startswith(PROTECTED_PREFIXES) and not _is_authorized(request):
+        return JSONResponse(status_code=401, content={"detail": "unauthorized"})
+    return await call_next(request)
+
+
+#: すべての応答に付けるセキュリティヘッダ（後から登録したミドルウェアが外側なので 401 にも付く）
+SECURITY_HEADERS = {
+    # 送った Content-Type 以外として解釈させない
+    "X-Content-Type-Options": "nosniff",
+    # 他のサイトの iframe に埋め込ませない（クリックジャッキング）。
+    # LIFF は LINE が画面として直接開く（iframe ではない）ので影響しない
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    # 出典ファイルの署名付きリンク（/files/<token>）などを、リンク先へ Referer で漏らさない
+    "Referrer-Policy": "no-referrer",
+    # Cloud Run は HTTPS のみ。ブラウザにも HTTP で繋がせない
+    "Strict-Transport-Security": "max-age=31536000",
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
+
+
+app.include_router(admin_router, prefix="/admin")  # 後方互換
+app.include_router(admin_router, prefix="/api")  # SPA(管理ダッシュボード)用
+app.include_router(proposals_router, prefix="/admin")
+app.include_router(proposals_router, prefix="/api")
+app.include_router(notices_router, prefix="/admin")
+app.include_router(notices_router, prefix="/api")
+app.include_router(surveys_router, prefix="/admin")
+app.include_router(surveys_router, prefix="/api")
+app.include_router(lake_router, prefix="/api")  # LINEグループ（データレイク）
+app.include_router(polls_router, prefix="/api")  # 日程調整（管理）
+app.include_router(feedback_router, prefix="/api")  # 意見箱（管理）
+app.include_router(liff_router)  # 日程調整の LIFF 画面（公開・LINE ログインで本人確認）
+app.include_router(liff_menu_router)  # メニューの LIFF 画面（予定と出欠など。公開・IDトークン）
+app.include_router(link_router, prefix="/api")  # LINE 連携の申請・予約投稿（管理）
+app.include_router(liff_link_router)  # LINE 連携の申請（LIFF・公開）
+
+
+@app.get("/dashboard", include_in_schema=False)
+def legacy_dashboard():
+    """旧・最小HTMLダッシュボードは SPA(/app) へ移行済み（design §10 確定5）。
+
+    既存ブックマーク救済のためリダイレクトのみ残す。
+    """
+    return RedirectResponse(url="/app/", status_code=308)
+
+
+class SpaStaticFiles(StaticFiles):
+    """SPA 用の静的配信。画面の URL（/app/events 等）を直接開いても index.html を返す。
+
+    `StaticFiles(html=True)` は `/app/` の index.html しか返さず、クライアントルーティングの
+    URL を直接開く・再読み込みすると 404 になるため、拡張子の無いパスだけ index.html に倒す。
+    存在しない JS/CSS 等（拡張子あり）は従来どおり 404 にする（壊れたアセットを HTML で隠さない）。
+    """
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404 or os.path.splitext(path)[1]:
+                raise
+            return await super().get_response("index.html", scope)
+
+
+def _mount_spa() -> None:
+    """ビルド済み SPA (web/dist) があれば /app で静的配信する。
+
+    Cloud Run(管理サービス)のイメージに dist を同梱する。dist が無いローカル/テスト
+    環境では何もしない（API・webhook は通常通り動作）。
+    """
+    dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "dist")
+    if os.path.isdir(dist):
+        app.mount("/app", SpaStaticFiles(directory=dist, html=True), name="spa")
+        logger.info("SPA を /app で配信します: %s", dist)
+
+
+_mount_spa()
+
+def welcome_text() -> str:
+    return ("友だち追加ありがとうございます！\n"
+            f"{lom.lom_short_name()}の{lom.bot_name()}です。\n"
+            "登録のため、事務局から配布された招待コードを入力してください。")
+
+# グループ/複数人トークで未連携ユーザーからメンションされた場合の案内。
+# 招待コードの照合は個別トークのみで行う（グループでコードを流させない）。
+def group_unlinked_text() -> str:
+    return ("グループでは登録手続きができません。\n"
+            f"「{lom.bot_name()}」との個別トークで、事務局から配布された招待コードを入力してください。")
+
+
+def get_parser() -> WebhookParser | None:
+    """channel secret から Webhook パーサを構築（未設定なら None）。"""
+    secret = config.line_channel_secret()
+    return WebhookParser(secret) if secret else None
+
+
+def _access_token_ready(token: str | None) -> bool:
+    return bool(token and token != "PLACEHOLDER_SET_ME")
+
+
+def reply_messages(reply_token: str, messages: list[Message]) -> bool:
+    """LINE へ任意のメッセージ列を返信。アクセストークン未設定時はスキップ。"""
+    token = config.line_channel_access_token()
+    if not _access_token_ready(token):
+        logger.warning("access token 未設定のため返信スキップ (%d件)", len(messages))
+        return False
+    messages = doc_links.externalize(messages)
+    configuration = Configuration(access_token=token)
+    with ApiClient(configuration) as api_client:
+        MessagingApi(api_client).reply_message(
+            ReplyMessageRequest(reply_token=reply_token, messages=messages)
+        )
+    lake.record_outbound("reply", messages, reply_token=reply_token)
+    return True
+
+
+#: 「入力中…」の表示秒数（5の倍数・最大60）。返事が届いた時点で自動的に消える
+LOADING_SECONDS = 60
+
+
+def start_loading(user_id: str) -> None:
+    """個別トークに「入力中…」のアニメーションを出す（受け付けたことがすぐ分かるように）。
+
+    LINE の仕様で個別トークのみ（グループでは表示できない）。メッセージ通数には数えられない。
+    失敗しても応答処理は続ける。
+    """
+    token = config.line_channel_access_token()
+    if not _access_token_ready(token):
+        return
+    try:
+        with ApiClient(Configuration(access_token=token)) as api_client:
+            MessagingApi(api_client).show_loading_animation(
+                ShowLoadingAnimationRequest(chat_id=user_id, loading_seconds=LOADING_SECONDS)
+            )
+    except Exception:  # noqa: BLE001 - 表示できなくても返事はする
+        logger.warning("入力中アニメーションを表示できませんでした", exc_info=True)
+
+
+def reply(reply_token: str, text: str) -> bool:
+    """テキスト1通を返信するショートカット。"""
+    return reply_messages(reply_token, [TextMessage(text=text)])
+
+
+@app.get("/")
+def root():
+    return {"service": "jci-sed-agent", "stage": "M0", "status": "ok"}
+
+
+@app.get("/favicon.ico")
+def favicon():
+    # ファビコンは SPA 側で data URI を使うため、直接要求には 204 を返して 404 を防ぐ
+    return Response(status_code=204)
+
+
+def _health_payload():
+    return {
+        "ok": True,
+        "channel_secret_loaded": bool(config.line_channel_secret()),
+        "access_token_loaded": _access_token_ready(config.line_channel_access_token()),
+    }
+
+
+# /healthz は Cloud Run 前段の Google Front End に横取りされる(Google 404 を返す)ため、
+# 実用のヘルスチェックは /health を使う。/healthz は後方互換で残す。
+@app.get("/health")
+def health():
+    return _health_payload()
+
+
+@app.get("/healthz")
+def healthz():
+    return _health_payload()
+
+
+def handle_text_message(user_id: str, text: str) -> list[Message]:
+    """テキストメッセージへの応答メッセージ列を生成。
+
+    未連携ユーザーは招待コードとして照合し本人確認を行う。
+    連携済みユーザーはメニュー応答（次回予定・出欠・連絡）に委譲する。
+    """
+    repo = get_repo()
+    member = repo.get_member_by_line_user_id(user_id)
+    if member is None:
+        result = verify_and_link(repo, user_id, text, now=datetime.now())
+        return [TextMessage(text=result.message)]
+    # AI の回答は数秒〜十数秒かかるため、まず「入力中…」を出して受け付けたことを伝える
+    start_loading(user_id)
+    return handle_member_text(repo, member, text, now=datetime.now())
+
+
+GROUP_SOURCE_TYPES = ("group", "room")
+
+
+def _is_group_source(event) -> bool:
+    """グループ/複数人トーク由来のイベントかどうか。"""
+    return getattr(event.source, "type", "user") in GROUP_SOURCE_TYPES
+
+
+def _self_mentionees(message) -> list:
+    """メッセージ内の「ボット自身へのメンション」一覧。"""
+    mention = getattr(message, "mention", None)
+    if mention is None:
+        return []
+    return [m for m in (mention.mentionees or []) if getattr(m, "is_self", False)]
+
+
+def _strip_self_mentions(message) -> str:
+    """本文からボット宛メンション（@専務AI など）を取り除く。"""
+    text = message.text
+    spans = []
+    for m in _self_mentionees(message):
+        index = getattr(m, "index", None)
+        length = getattr(m, "length", None)
+        if index is None or length is None:
+            continue
+        if 0 <= index <= len(text) and 0 < length <= len(text) - index:
+            spans.append((index, index + length))
+    for start, end in sorted(spans, reverse=True):
+        text = text[:start] + text[end:]
+    return text.strip()
+
+
+def handle_group_text_message(user_id: str | None, text: str,
+                              group_id: str | None = None) -> list[Message]:
+    """グループ/複数人トークでメンションされたときの応答メッセージ列を生成。
+
+    未連携ユーザーには招待コード照合を行わず、個別トークへ誘導する。
+    """
+    repo = get_repo()
+    member = repo.get_member_by_line_user_id(user_id) if user_id else None
+    if member is None:
+        return [TextMessage(text=group_unlinked_text())]
+    if not text:
+        return [build_menu()]
+    return handle_member_text(repo, member, text, now=datetime.now(), in_group=True,
+                              group_id=group_id)
+
+
+def _link_menu_on_follow(user_id: str | None) -> None:
+    """連携済みの会員が友だち追加・ブロック解除したら、立場のメニューを結び直す。
+
+    友だちでない間に結んだメニューは残らないため（docs/liff-menu-design.md §2）。
+    """
+    if not user_id:
+        return
+    try:
+        repo = get_repo()
+        member = repo.get_member_by_line_user_id(user_id)
+        if member is not None:
+            rich_menu_link.link(repo, member)
+    except Exception:  # noqa: BLE001 - 歓迎メッセージは必ず返す
+        logger.exception("友だち追加時のメニューの結びつけに失敗しました")
+
+
+def handle_event(event) -> None:
+    """単一の LINE イベントを処理する。"""
+    if isinstance(event, FollowEvent):
+        logger.info("follow event: userId=%s", event.source.user_id)
+        _link_menu_on_follow(event.source.user_id)
+        reply(event.reply_token, welcome_text())
+    elif isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
+        user_id = event.source.user_id
+        text = event.message.text
+        if _is_group_source(event):
+            # グループではボット宛メンションがある場合のみ応答する（勝手に発言しない）
+            if not _self_mentionees(event.message):
+                logger.info("group message ignored (no mention): userId=%s", user_id)
+                return
+            body = _strip_self_mentions(event.message)
+            # 本文は会員の発言（個人情報を含みうる）なのでログに出さない。必要ならデータレイクで見る
+            logger.info("group message event: userId=%s chars=%d", user_id, len(body))
+            group_id = getattr(event.source, "group_id", None) or getattr(
+                event.source, "room_id", None)
+            reply_messages(event.reply_token,
+                           handle_group_text_message(user_id, body, group_id))
+            return
+        logger.info("message event: userId=%s chars=%d", user_id, len(text))
+        reply_messages(event.reply_token, handle_text_message(user_id, text))
+    elif isinstance(event, PostbackEvent):
+        user_id = event.source.user_id
+        data = event.postback.data
+        logger.info("postback event: userId=%s data=%s", user_id, data)
+        params = getattr(event.postback, "params", None)  # datetimepicker で選んだ日付など
+        messages = handle_postback(user_id, data, params)
+        if messages:
+            reply_messages(event.reply_token, messages)
+    else:
+        logger.info("other event: %s", type(event).__name__)
+
+
+def dispatch_event(event, *, fail_open: bool) -> bool:
+    """重複を除いて1件処理する。処理したら True、処理済みなら False。
+
+    LINE の再送と Pub/Sub の重複配信で同じイベントが2回届いても、返信は1回にする
+    （webhookEventId で処理権を取る）。処理権を記録できないとき、fail_open=True（Webhook の中）は
+    返信を優先して処理し、False（Pub/Sub）は例外を出して再送させる。
+    処理中の失敗は外に出さない（再送すると二重に返信しうるため）。
+    """
+    event_id = getattr(event, "webhook_event_id", None)
+    if event_id:
+        try:
+            claimed = get_repo().claim_line_event(event_id)
+        except Exception:
+            if not fail_open:
+                raise
+            logger.exception("イベントの処理権を記録できません（そのまま処理）: %s", event_id)
+            claimed = True
+        if not claimed:
+            logger.info("処理済みのイベントを無視: %s", event_id)
+            return False
+    try:
+        handle_event(event)
+    except Exception:  # noqa: BLE001 - 1件の失敗で他のイベントを止めない
+        logger.exception("イベント処理に失敗しました: %s", type(event).__name__)
+    return True
+
+
+def handle_postback(user_id: str, data: str, params: dict | None = None) -> list[Message]:
+    """postback（出欠ボタン・メニュー）を処理してメッセージ列を返す。"""
+    # リッチメニューのタブ切り替え（richmenuswitch）。LINE 側で切り替わるので返事はしない
+    if data.startswith("tab:"):
+        return []
+    repo = get_repo()
+    member = repo.get_member_by_line_user_id(user_id)
+    if member is None:
+        return [TextMessage(text="先に招待コードで登録をお願いします。")]
+    if data.startswith("menu|"):
+        return handle_member_text(repo, member, data, now=datetime.now())
+    if data.startswith(f"{ACTION_CAL}|"):
+        return handle_calendar_postback(repo, member, data, now=datetime.now())
+    if data.split("|", 1)[0] in (doc_session.ACTION, doc_session.ACTION_EDIT,
+                                 doc_session.ACTION_UNDO):
+        return doc_session.handle_postback(repo, member, data, now=datetime.now())
+    if data.startswith(f"{ACTION_NEW}|"):
+        return handle_new_plan_postback(repo, member, data, now=datetime.now())
+    if data.startswith(f"{ACTION_CREATE}|"):
+        return handle_proposal_create_postback(repo, member, data, now=datetime.now())
+    if data.startswith(f"{ACTION_ESCALATE}|"):
+        return handle_escalate_postback(repo, member, data, now=datetime.now())
+    if data.startswith(f"{ai_feedback.ACTION_FEEDBACK}|"):
+        return ai_feedback.handle_feedback_postback(member, data)
+    if data.startswith(f"{ACTION_NOTICE_DONE}|"):
+        return handle_done_postback(repo, member.member_id, data)
+    if data.startswith(f"{line_link.ACTION_LINK}|"):
+        return line_link.handle_postback(repo, member, data, now=datetime.now())
+    if data.startswith(f"{proposal_submit.ACTION_PLAN}|"):
+        return proposal_submit.handle_plan_postback(repo, member, data, params, datetime.now())
+    return apply_postback(repo, member, data, now=datetime.now())
+
+
+def _tick_gcal(repo, now: datetime) -> dict | None:
+    """カレンダー連携（F3-2）。先に差分を取り込み、その後に未反映分を再反映する。
+
+    取込を先にするのは、カレンダーで直された内容を古いシステム側の値で上書きしないため。
+    失敗しても tick 本体（催促）は止めない。
+    """
+    try:
+        pulled = pull_changes(repo, now)
+        retried = retry_pending(repo, now)
+    except Exception:  # noqa: BLE001 - 催促処理を巻き込まない
+        logger.exception("カレンダー連携に失敗しました")
+        return {"error": "gcal_failed"}
+    if pulled is None and retried is None:
+        return None
+    return {"pull": pulled, "retry": retried}
+
+
+def _tick_gmail_import(repo, now: datetime) -> dict | None:
+    """対外連絡のGmail取込（F5-1）。未設定・失敗でも tick 本体は止めない。"""
+    if not gmail.is_configured():
+        return None
+    try:
+        summary = import_gmail_notices(repo, now=now)
+    except Exception:  # noqa: BLE001 - 催促処理を巻き込まない
+        logger.exception("Gmail取込に失敗しました")
+        return {"error": "gmail_import_failed"}
+    return {"total": summary.total, "created": summary.created, "updated": summary.updated}
+
+
+@app.post("/tasks/tick")
+def tasks_tick():
+    """Cloud Scheduler から定期起動。締切到来ステージの催促を発火する。
+
+    ※ Cloud Run の IAM 認証（Scheduler の OIDC 呼び出し）で保護する前提。公開しない。
+    """
+    repo = get_repo()
+    now = datetime.now()
+    # 1時間に1回だけ動かす。手動実行・Scheduler の再試行と重なると、LINE への送信
+    # （グループ投稿は取り消せない）が二重になるため
+    slot = f"tick:{now:%Y%m%d%H}"
+    if not repo.claim_once(slot):
+        logger.warning("この時間の tick は実行済みのため何もしません: %s", slot)
+        return {"skipped": "already_ran", "slot": slot}
+    # 予約投稿は時刻どおりに出したいので最初に送る（後続の取込が遅くても遅れない）
+    try:
+        posts_result = line_link.send_due_posts(repo, now)
+    except Exception:  # noqa: BLE001 - 催促処理を巻き込まない
+        logger.exception("予約投稿の処理に失敗しました")
+        posts_result = {"error": "posts_failed"}
+    gmail_result = _tick_gmail_import(repo, now)
+    gcal_result = _tick_gcal(repo, now)
+    jobs = plan_reminders(repo, now)
+    results = []
+    for job in jobs:
+        event = repo.get_event(job.event_id)
+        if event is None:
+            continue
+        message = build_attendance_request(event)
+        report = execute_delivery(
+            repo, job, message.text, now=now,
+            sender=line_push.member_messages_sender(repo, [message]),
+        )
+        results.append(
+            {
+                "job_id": job.job_id,
+                "stage": job.stage,
+                "sent": report.sent,
+                "blocked": report.blocked,
+                "deferred": report.deferred,
+                "failed": report.failed,
+                "halted": report.halted,
+            }
+        )
+    # 意見箱: AI の分類と専務理事への通知（docs/feedback-box-design.md §4）
+    try:
+        feedback_result = feedback_box.process(repo, now)
+    except Exception:  # noqa: BLE001 - 催促・取込を巻き込まない
+        logger.exception("意見箱の処理に失敗しました")
+        feedback_result = {"error": "feedback_failed"}
+    # リッチメニュー: 朝に1日1回、全員の今のメニューを確かめて立場と違う人を結び直す
+    try:
+        menus_result = rich_menu_link.reconcile(repo, now)
+    except Exception:  # noqa: BLE001 - tick 本体を止めない
+        logger.exception("リッチメニューの確認に失敗しました")
+        menus_result = {"error": "menus_failed"}
+    # 取込・索引は時間がかかるので、会員に届く催促を送り終えてから行う。
+    # ドライブの資料を取り込んでから索引する（同じ tick で新しい資料も検索できるように）
+    lake_result = {"redact": redact_unsent(), "drive": drive_knowledge.sync(),
+                   "knowledge": index_knowledge()}
+    # 事業計画書・委員会サマリー（作業文書）を議案台帳に写す（docs/proposal-ledger-design.md §5）
+    proposals_result = proposal_sync.sync(repo, now)
+    # 議案の提出・提出締切を専務に知らせる（写した後の空欄の数で。proposal-ledger-design §10）
+    try:
+        proposal_notice_result = proposal_submit.process(repo, now)
+    except Exception:  # noqa: BLE001 - tick 本体を止めない
+        logger.exception("議案の知らせに失敗しました")
+        proposal_notice_result = {"error": "proposal_notice_failed"}
+    return {
+        "planned": len(jobs), "results": results, "gmail": gmail_result, "gcal": gcal_result,
+        "lake": lake_result, "posts": posts_result, "proposals": proposals_result,
+        "feedback": feedback_result, "proposal_notices": proposal_notice_result,
+        "menus": menus_result,
+    }
+
+
+@app.get("/files/{token}")
+def open_line_file(token: str):
+    """AI の回答の出典リンク（app/file_links.py）。署名と期限が正しいときだけファイルを返す。"""
+    data = file_links.verify_token(token)
+    if data is None or not line_worker.bucket():
+        return Response(
+            content="リンクの有効期限が切れているか、正しくありません。",
+            status_code=403, media_type="text/plain; charset=utf-8",
+        )
+    name = line_worker.find_content_object(str(data["m"]))
+    if name is None:
+        # 送信取消などで削除済み
+        return Response(content="このファイルは削除されています。", status_code=404,
+                        media_type="text/plain; charset=utf-8")
+    raw, content_type = lake_api_module._gcs_download(f"gs://{line_worker.bucket()}/{name}")
+    filename = name.rsplit("/", 1)[-1]
+    return Response(
+        content=raw, media_type=content_type,
+        headers={
+            # LINE のアプリ内ブラウザでそのまま表示できるよう inline
+            "Content-Disposition": f"inline; filename*=UTF-8''{urllib.parse.quote(filename)}",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@app.post("/pubsub/line-worker")
+async def pubsub_line_worker(request: Request):
+    """データレイクのワーカー（Pub/Sub Push, docs/datalake-design.md §4.2）。
+
+    Pub/Sub の OIDC トークンを検証する（/admin 等の X-Admin-Token とは別の認証）。
+    2xx で処理済み（ack）、それ以外は Pub/Sub が間隔を空けて再送し、5回失敗で DLQ へ退避。
+    """
+    if not line_worker.is_configured():
+        # 設定前に届いた分は再送させる（捨てない）
+        return Response(status_code=503)
+    if not line_worker.verify_push(request.headers.get("Authorization")):
+        return Response(status_code=401)
+    try:
+        env = line_worker.decode_push(await request.json())
+    except Exception:  # noqa: BLE001 - 壊れたメッセージは再送しても直らない
+        logger.exception("Push メッセージを解釈できません（破棄）")
+        return Response(status_code=204)
+    try:
+        result = await run_in_threadpool(line_worker.handle_envelope, get_repo(), env,
+                                         datetime.now())
+    except Exception:  # noqa: BLE001 - 一時障害は再送で回復させる
+        logger.exception("ワーカー処理に失敗（再送待ち）: id=%s", env.get("id"))
+        return Response(status_code=500)
+    logger.info("lake worker: id=%s result=%s", env.get("id"), result)
+    return Response(status_code=204)
+
+
+@app.post("/line/webhook")
+async def line_webhook(request: Request):
+    parser = get_parser()
+    if parser is None:
+        logger.error("channel secret 未設定。Webhook を処理できません。")
+        raise HTTPException(status_code=503, detail="channel secret not configured")
+
+    signature = request.headers.get("X-Line-Signature", "")
+    body = (await request.body()).decode("utf-8")
+
+    try:
+        events = parser.parse(body, signature)
+    except InvalidSignatureError as exc:
+        logger.warning("署名検証に失敗しました。")
+        raise HTTPException(status_code=400, detail="invalid signature") from exc
+
+    # 署名検証済みの生イベントをデータレイクへ（docs/datalake-design.md §4.1）。
+    # 応答処理より先に行い、応答処理が失敗しても記録は残す。publish 失敗でも応答は続ける。
+    published = await run_in_threadpool(lake.ingest_webhook, body)
+
+    # 返信は Pub/Sub 経由（/pubsub/line-reply）で作り、LINE にはすぐ 200 を返す。
+    # AI の回答を待ってから返すと LINE の待ち時間を超える（2026-10-12 本番で検証がタイムアウト）。
+    # publish できなかったときだけ、ここで返信する（取りこぼさない）。
+    if not (published and config.async_line_reply()):
+        for event in events:
+            await run_in_threadpool(dispatch_event, event, fail_open=True)
+
+    # LINE には常に 200 を返す（個別失敗は内部でログ化）。500 を返すと LINE が再送し、
+    # 同じ失敗を繰り返したり二重に返信したりするため。
+    return Response(status_code=200)
+
+
+@app.post("/pubsub/line-reply")
+async def pubsub_line_reply(request: Request):
+    """LINE への返信を作る（Pub/Sub Push `line-events-reply`、フィルタ kind="webhook"）。
+
+    認証は /pubsub/line-worker と同じ OIDC。処理権の記録に失敗したときだけ 500 で再送させ、
+    返信処理そのものの失敗は再送しない（二重に返信しないため）。
+    """
+    if not line_worker.is_configured():
+        return Response(status_code=503)
+    if not line_worker.verify_push(request.headers.get("Authorization")):
+        return Response(status_code=401)
+    if not config.async_line_reply():
+        # 無効の間は Webhook の中で返信済み
+        return Response(status_code=204)
+    try:
+        env = line_worker.decode_push(await request.json())
+        if env.get("kind") != lake.KIND_WEBHOOK:
+            return Response(status_code=204)
+        event = Event.from_dict(env["payload"])
+    except Exception:  # noqa: BLE001 - 未知の種類・壊れたメッセージは再送しても直らない
+        logger.info("返信の対象外のメッセージ（破棄）", exc_info=True)
+        return Response(status_code=204)
+    try:
+        await run_in_threadpool(dispatch_event, event, fail_open=False)
+    except Exception:  # noqa: BLE001 - 処理権を記録できない一時障害は再送で回復させる
+        logger.exception("返信処理を開始できません（再送待ち）: id=%s", env.get("id"))
+        return Response(status_code=500)
+    return Response(status_code=204)
