@@ -247,10 +247,20 @@ def test_document_error_keeps_text_check(repo, docs, monkeypatch, pushed):
     assert p.format_check.fixed == [] and pushed == []
 
 
-def test_without_document_only_text_is_checked(repo, pushed, monkeypatch):
+def test_without_setting_says_so(repo, pushed, monkeypatch):
     monkeypatch.delenv("COMMITTEE_DOCS_FOLDER", raising=False)
     p = proposal_format.check(repo, repo.get_proposal("p1"), MORNING)
+    assert p.format_check.fixed == [] and pushed == []
+    assert any("COMMITTEE_DOCS_FOLDER" in x for x in p.format_check.issues)
+    assert any("全角英数字" in x for x in p.format_check.issues)
+
+
+def test_without_document_only_text_is_checked(repo, pushed, monkeypatch):
+    monkeypatch.delenv("COMMITTEE_DOCS_FOLDER", raising=False)
+    repo.upsert_proposal(repo.get_proposal("p1").model_copy(update={"doc_id": None}))
+    p = proposal_format.check(repo, repo.get_proposal("p1"), MORNING)
     assert p.format_check.fixed == []
+    assert not any("COMMITTEE_DOCS_FOLDER" in x for x in p.format_check.issues)
     assert any("全角英数字" in x for x in p.format_check.issues)
 
 

@@ -98,7 +98,11 @@ def check(repo: Repository, p: Proposal, now: datetime) -> Proposal:
     """形式チェック。議案書があれば体裁を直してから調べ、直したら委員長に知らせる。"""
     fixed: list[str] = []
     issues: list[str] = []
-    if p.doc_id and committee_docs.is_enabled():
+    if p.doc_id and not committee_docs.is_enabled():
+        # 設定がないと文書を直せないまま「問題なし」に見えてしまうので、画面に出す
+        issues.append("議案書の体裁を直す設定（COMMITTEE_DOCS_FOLDER）がこのサービスにないため、"
+                      "体裁は直していません。")
+    elif p.doc_id:
         try:
             token = committee_docs._token()
             fix, doc = doc_format.fix_document(p.doc_id, token)

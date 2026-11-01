@@ -240,7 +240,7 @@ fork した場合も、元のリポジトリの Secrets・Variables は引き継
 | AI の返信を Webhook の外で作る（推奨） | `scripts/setup_line_reply.sh`（データレイクの後） | `LINE_ASYNC_REPLY=1` |
 | Google カレンダー連携 | `scripts/setup_calendar_sync.sh`、カレンダーをサービスアカウントに共有 | `GCAL_CALENDAR_ID` |
 | ドライブ資料の取込 | ドライブのフォルダを実行用サービスアカウントに閲覧者で共有 | `DRIVE_KNOWLEDGE_FOLDERS` |
-| 委員会資料の編集 | `scripts/setup_doc_editor.sh <フォルダ ID>` | `COMMITTEE_DOCS_FOLDER` |
+| 委員会資料の編集・議案書の体裁の自動修正 | `scripts/setup_doc_editor.sh <フォルダ ID>` | `COMMITTEE_DOCS_FOLDER`（会員向けと管理画面の両方のサービス） |
 | 議案書の作成 | 雛形の Google ドキュメントを用意 | `PLAN_TEMPLATE_DOC` |
 | 対外連絡メールの取込 | `scripts/gmail_oauth_setup.py --write-secrets`（LOM 公式 Gmail で同意） | `GMAIL_LABEL`（任意） |
 | 障害通知・バックアップ・予算アラート | `BUDGET_EMAIL=<通知先> ./scripts/setup_ops.sh` | — |
