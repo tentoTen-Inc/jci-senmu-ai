@@ -791,6 +791,20 @@ function Detail({
                 <dd className="num">{p.deadlines?.[k.key] ? fmtDateTime(p.deadlines[k.key], false) : <span className="text-ink-faint">未設定</span>}</dd>
               </div>
             ))}
+            {!p.doc_id && (
+              <>
+                <dt className="text-ink-sub">資料の場所</dt>
+                <dd className="truncate">
+                  {p.storage_uri ? (
+                    <a href={p.storage_uri} target="_blank" rel="noreferrer" className="font-bold text-line-ink hover:underline">
+                      {p.storage_uri}
+                    </a>
+                  ) : (
+                    <span className="text-ink-faint">未設定</span>
+                  )}
+                </dd>
+              </>
+            )}
             <dt className="text-ink-sub">本文</dt>
             <dd>{p.content?.trim() ? `${p.content.trim().length.toLocaleString()}文字` : <span className="text-ink-faint">なし</span>}</dd>
           </dl>
@@ -835,6 +849,7 @@ function EditForm({
     submit: toDateInput(p.deadlines?.submit),
     deliver: toDateInput(p.deadlines?.deliver),
     content: p.content ?? "",
+    storage_uri: p.storage_uri ?? "",
   });
   const [saving, setSaving] = useState(false);
 
@@ -852,6 +867,8 @@ function EditForm({
           number: f.number.trim() || null,
           committee: f.committee.trim() || null,
           content: f.content,
+          // 議案書の作業文書（doc_id）と結びついた議案は、場所を文書から決めるので送らない
+          ...(p.doc_id ? {} : { storage_uri: f.storage_uri.trim() || null }),
           deadlines: {
             entry: fromDateInput(f.entry),
             submit: fromDateInput(f.submit),
@@ -882,6 +899,16 @@ function EditForm({
         </Field>
       </div>
       <CommitteeList committees={committees} />
+      {!p.doc_id && (
+        <Field label="資料の場所（Drive の URL）" hint="予算書のように提出先がフォルダの議案は、そのフォルダの URL を入れてください。">
+          <input
+            className="w-full"
+            placeholder="https://drive.google.com/drive/folders/…"
+            value={f.storage_uri}
+            onChange={(e) => setF({ ...f, storage_uri: e.target.value })}
+          />
+        </Field>
+      )}
       <div className="grid gap-3 sm:grid-cols-3">
         {DEADLINE_KINDS.map((k) => (
           <Field key={k.key} label={`${k.label}の締切`}>
