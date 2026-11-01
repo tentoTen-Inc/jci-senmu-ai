@@ -2,12 +2,15 @@
 # GitHub Actions → Cloud Run の自動デプロイ基盤を作る（1回だけ実行すればよい）。
 #
 # 方式: Workload Identity 連携（鍵レス）。サービスアカウントのJSON鍵は作らない。
-#       GitHub の OIDC トークンを GCP が検証し、指定リポジトリからのみ
-#       デプロイ用サービスアカウントの権限を借用できるようにする。
+#       GitHub の OIDC トークンを GCP が検証し、指定リポジトリの「production 環境」で
+#       動くジョブからのみ、デプロイ用サービスアカウントの権限を借用できるようにする。
+#       リポジトリは名前ではなく ID で照合する（名前を付け替えた別のリポジトリを通さない）。
+#       production 環境には「承認してから実行」（実行した gh のユーザーを承認者にする）と
+#       「main からだけ」の決まりを付ける。何度実行してもよい（既存の設定はこの内容に更新する）。
 #
 # 前提: gcloud がプロジェクトのオーナー相当のアカウントで認証済み。
 #       案件ごとの認証分離のため、このリポジトリ直下で direnv 有効な状態で実行すること。
-# 使い方: ./scripts/setup_github_deploy.sh
+# 使い方: GITHUB_REPO=<オーナー>/<リポジトリ> ./scripts/setup_github_deploy.sh
 #
 # 実行後、GitHub リポジトリに以下の Secrets を登録する（gh があれば自動登録する）。
 #   GCP_WIF_PROVIDER : projects/<番号>/locations/global/workloadIdentityPools/github/providers/github
@@ -23,6 +26,8 @@ POOL="github"
 PROVIDER="github"
 
 PROJECT_NUMBER="$(gcloud projects describe "${PROJECT}" --format='value(projectNumber)')"
+REPO_ID="$(gh api "repos/${GITHUB_REPO}" -q .id)"
+CONDITION="assertion.repository_id == '${REPO_ID}' && assertion.environment == 'production'"
 
 echo ">> project=${PROJECT} (${PROJECT_NUMBER}) repo=${GITHUB_REPO}"
 
@@ -69,7 +74,7 @@ else
   echo "   既に存在: ${POOL}"
 fi
 
-echo ">> OIDC プロバイダ（このリポジトリからのみ許可）"
+echo ">> OIDC プロバイダ（このリポジトリの production 環境からのみ許可）"
 if ! gcloud iam workload-identity-pools providers describe "${PROVIDER}" \
   --location=global --workload-identity-pool="${POOL}" \
   --project "${PROJECT}" >/dev/null 2>&1; then
@@ -79,10 +84,15 @@ if ! gcloud iam workload-identity-pools providers describe "${PROVIDER}" \
     --display-name "GitHub OIDC" \
     --issuer-uri="https://token.actions.githubusercontent.com" \
     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
-    --attribute-condition="assertion.repository == '${GITHUB_REPO}'" \
+    --attribute-condition="${CONDITION}" \
     --project "${PROJECT}"
 else
-  echo "   既に存在: ${PROVIDER}"
+  gcloud iam workload-identity-pools providers update-oidc "${PROVIDER}" \
+    --location=global \
+    --workload-identity-pool="${POOL}" \
+    --attribute-condition="${CONDITION}" \
+    --project "${PROJECT}" >/dev/null
+  echo "   既に存在: ${PROVIDER}（許可の条件を更新: ${CONDITION}）"
 fi
 
 echo ">> リポジトリからの権限借用を許可"
@@ -93,6 +103,20 @@ gcloud iam service-accounts add-iam-policy-binding "${DEPLOY_SA}" \
   --quiet >/dev/null
 
 WIF_PROVIDER="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/providers/${PROVIDER}"
+
+echo
+echo ">> GitHub の production 環境（承認してから実行・main からだけ）"
+REVIEWER_ID="$(gh api user -q .id)"
+gh api -X PUT "repos/${GITHUB_REPO}/environments/production" --input - >/dev/null <<JSON
+{"reviewers": [{"type": "User", "id": ${REVIEWER_ID}}],
+ "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+JSON
+if ! gh api "repos/${GITHUB_REPO}/environments/production/deployment-branch-policies" \
+  -q '.branch_policies[].name' | grep -qx main; then
+  gh api -X POST "repos/${GITHUB_REPO}/environments/production/deployment-branch-policies" \
+    -f name=main -f type=branch >/dev/null
+fi
+echo "   承認者: $(gh api user -q .login)"
 
 echo
 echo ">> GitHub Secrets の登録"
@@ -114,8 +138,8 @@ fi
 
 cat <<EOF
 
-完了。これ以降、main へのマージで CI 成功後に自動デプロイされます
-（.github/workflows/deploy.yml）。
+完了。これ以降、main へのマージで CI 成功後にデプロイが始まり、
+GitHub の Actions で承認すると本番に反映されます（.github/workflows/deploy.yml）。
 
   GCP_WIF_PROVIDER = ${WIF_PROVIDER}
   GCP_DEPLOY_SA    = ${DEPLOY_SA}

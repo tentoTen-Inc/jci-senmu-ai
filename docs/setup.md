@@ -188,7 +188,11 @@ Workload Identity 連携を作り、GitHub の Secrets（`GCP_WIF_PROVIDER`・`G
 GITHUB_REPO=<GitHub のオーナー>/<リポジトリ名> ./scripts/setup_github_deploy.sh
 ```
 
+あわせて、GitHub の `production` 環境に「承認してから実行」（承認者はスクリプトを実行した人）と「main からだけ」の決まりを付けます。main にマージすると CI のあとにデプロイが始まり、GitHub の Actions の画面で［Review deployments］→［Approve］を押すと本番に反映されます。
+Google Cloud 側は、このリポジトリ（ID で照合）の `production` 環境で動くジョブからしか、デプロイを受け付けません。
+
 Variables の `GCP_PROJECT_ID` が未設定のリポジトリでは、自動デプロイは動きません（CI だけが動きます）。
+fork した場合も、元のリポジトリの Secrets・Variables は引き継がれないので、自分のプロジェクトで上のスクリプトを実行してください。
 
 ---
 

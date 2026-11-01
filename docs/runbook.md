@@ -47,7 +47,8 @@
 
 ### デプロイ
 
-`main` にマージすると、GitHub Actions が CI の成功後に両サービスへデプロイします（[.github/workflows/deploy.yml](../.github/workflows/deploy.yml)）。
+`main` にマージすると、GitHub Actions が CI の成功後にデプロイを始めます（[.github/workflows/deploy.yml](../.github/workflows/deploy.yml)）。
+`production` 環境の承認者が、Actions の画面で［Review deployments］→［Approve］を押すと、両サービスに反映されます。
 CI が動かないときの手動デプロイ:
 
 ```bash
