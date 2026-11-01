@@ -48,7 +48,7 @@ def test_member_answer_uses_flash(monkeypatch):
 def test_review_still_uses_pro(monkeypatch):
     seen = {}
 
-    def fake(content, *, model, project, location):
+    def fake(content, *, model, project, location, **kw):
         seen["model"] = model
         return Generation(text=json.dumps({"summary": "s", "points": [], "concerns": []}))
 

@@ -40,6 +40,9 @@ type Proposal = {
   doc_type: string;
   content: string | null;
   storage_uri: string | null;
+  sources?: { name: string; url: string }[];
+  source_error?: string | null;
+  sources_read_at?: string | null;
   deadlines: Deadlines;
   format_check: FormatCheck;
   llm_review: LlmReview;
@@ -693,8 +696,32 @@ function Detail({
       <section className="rounded-card bg-white p-5">
         <h3 className="mb-1 font-extrabold">議案書のチェック</h3>
         <p className="mb-3 text-xs text-ink-sub">
-          形式チェックは必須項目と表記を調べます。フォント・文字の大きさ・全角の英数字のような体裁は議案書を直接直し、直したことを委員長に LINE で知らせます。AI の確認は内容の要約と気になる点を出します（最終判断は専務が行います）。
+          {p.doc_id
+            ? "形式チェックは必須項目と表記を調べます。フォント・文字の大きさ・全角の英数字のような体裁は議案書を直接直し、直したことを委員長に LINE で知らせます。"
+            : "資料の場所（Drive のフォルダ）のドキュメントとスプレッドシートを読んで調べます。予算書は数式のエラー・古い年の表記・合計の手入力・文字として入った数字を調べます（自動では直しません）。"}
+          AI の確認は内容の要約と気になる点を出します（最終判断は専務が行います）。
         </p>
+        {!p.doc_id && (p.sources?.length || p.source_error) && (
+          <div className="mb-3 rounded-xl bg-gray-50 px-3 py-2 text-sm">
+            <div className="text-xs font-bold text-ink-sub">
+              資料の場所から読んだ資料
+              {p.sources_read_at && <span className="ml-1 font-normal">{fmtDateTime(p.sources_read_at)}</span>}
+            </div>
+            {p.source_error ? (
+              <div className="mt-1 text-hold">{p.source_error}</div>
+            ) : (
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {p.sources?.map((f) => (
+                  <li key={f.url}>
+                    <a href={f.url} target="_blank" rel="noreferrer" className="font-bold text-line-ink hover:underline">
+                      {f.name}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           <Button size="sm" disabled={!!busy} onClick={formatCheck}>
             {busy === "format" ? "チェック中…" : p.format_check ? "形式チェックをやり直す" : "形式チェック"}
@@ -716,7 +743,7 @@ function Detail({
           <div className="mt-4">
             <div className="flex items-center gap-2 text-sm font-bold">
               形式チェック
-              {p.format_check.passed ? <Badge tone="green">問題なし</Badge> : <Badge tone="amber">委員会で直す点 {p.format_check.issues.length}件</Badge>}
+              {p.format_check.passed ? <Badge tone="green">問題なし</Badge> : <Badge tone="amber">{p.doc_id ? "委員会で直す点" : "直す点"} {p.format_check.issues.length}件</Badge>}
             </div>
             {p.format_check.issues.length > 0 && (
               <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-hold">

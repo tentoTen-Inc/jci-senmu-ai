@@ -1,5 +1,8 @@
 """議案の形式チェックと、体裁の自動修正・委員長への知らせ（docs/proposal-ledger-design.md §11）。
 
+作業文書を持たず資料フォルダに紐づく議案（予算書など）は、フォルダの資料を読んで調べる
+（app/folder_docs.py、docs/folder-proposal-check-design.md。自動では直さない）。
+
 管理画面の［形式チェック］から動く（ボタンからだけ。チャットからは動かさない）。
 
 1. 議案書（Google ドキュメント）があれば、フォント・文字の大きさ・全角の英数字と記号を直す
@@ -15,10 +18,10 @@ from datetime import datetime
 
 from linebot.v3.messaging import TextMessage
 
-from . import committee_docs, doc_format, lom
-from .format_check import run_format_check
+from . import committee_docs, doc_format, folder_docs, lom
+from .format_check import check_fullwidth, run_format_check
 from .guardrails import is_quiet_hours
-from .models import FormatCheckResult, Member, MemberStatus, Proposal
+from .models import FormatCheckResult, Member, MemberStatus, Proposal, ProposalSource
 from .proposal_submit import _push_one, doc_label
 from .proposal_sync import apply_document
 from .repository import Repository
@@ -94,6 +97,30 @@ def send_pending(repo: Repository, now: datetime) -> int:
     return count
 
 
+def _fiscal_year(repo: Repository, p: Proposal, now: datetime) -> int:
+    """議案の年度（議案名 → 台帳の年度 → 運用開始日の年 → 今年）。"""
+    start = repo.get_settings().operation_start
+    fallback = p.fiscal_year or (start.year if start else now.year)
+    return folder_docs.fiscal_year(p.title, fallback)
+
+
+def read_sources(repo: Repository, p: Proposal, now: datetime
+                 ) -> tuple[Proposal, list[folder_docs.SourceFile] | None]:
+    """資料フォルダを読み、台帳の本文と読んだファイルの一覧に写す。読めなければ files は None。"""
+    read = folder_docs.read(p.storage_uri)
+    if read.error:
+        p = p.model_copy(update={"source_error": read.error, "sources_read_at": now})
+        repo.upsert_proposal(p)
+        return p, None
+    p = p.model_copy(update={
+        "content": folder_docs.to_content(read.files),
+        "sources": [ProposalSource(name=f.name, url=f.url) for f in read.files],
+        "source_error": None, "sources_read_at": now,
+    })
+    repo.upsert_proposal(p)
+    return p, read.files
+
+
 def check(repo: Repository, p: Proposal, now: datetime) -> Proposal:
     """形式チェック。議案書があれば体裁を直してから調べ、直したら委員長に知らせる。"""
     fixed: list[str] = []
@@ -112,7 +139,17 @@ def check(repo: Repository, p: Proposal, now: datetime) -> Proposal:
             logger.warning("議案書の体裁を直せませんでした: %s %s", p.proposal_id, exc)
             issues.append("議案書の体裁を自動で直せませんでした（文書を開けない、または"
                           "チェック中に編集されました）。少し待ってからやり直してください。")
-    result: FormatCheckResult = run_format_check(p)
+    if not p.doc_id and folder_docs.parse_location(p.storage_uri):
+        # 資料フォルダに紐づく議案（予算書など）。読んだ資料を調べる（自動では直さない）
+        p, files = read_sources(repo, p, now)
+        if files is None:
+            result = FormatCheckResult(passed=False, issues=[p.source_error or ""])
+        else:
+            found = folder_docs.check(files, _fiscal_year(repo, p, now))
+            found += check_fullwidth(folder_docs.doc_text(files))
+            result = FormatCheckResult(passed=not found, issues=found)
+    else:
+        result = run_format_check(p)
     previous = p.format_check
     # まだ知らせていない前回の直しは引き継ぐ（知らせが消えないように）
     carried = (previous.fixed if previous and previous.fixed and previous.notified_at is None

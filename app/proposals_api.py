@@ -7,7 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import proposal_format
+from . import folder_docs, proposal_format
 from .audit import write_audit
 from .deps import get_repo
 from .drive_import import import_drive_folder
@@ -191,7 +191,12 @@ def llm_review(
     if p is None:
         raise HTTPException(status_code=404, detail="proposal not found")
     now = datetime.now()
-    outcome = review_proposal(p.content or "")
+    if not p.doc_id and folder_docs.parse_location(p.storage_uri):
+        # 資料フォルダに紐づく議案（予算書など）は、いつも最新の資料を読んでから確かめる
+        p, files = proposal_format.read_sources(repo, p, now)
+        if files is None:
+            raise HTTPException(status_code=503, detail=p.source_error)
+    outcome = review_proposal(p.content or "", p.doc_type)
     if outcome is None:
         if (p.content or "").strip():
             # 本文はあるがLLM呼び出しが失敗 → コスト/失敗率の可視化のため記録する。
