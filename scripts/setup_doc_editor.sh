@@ -11,7 +11,8 @@ set -euo pipefail
 FOLDER_ID="${1:?04-委員会 のフォルダIDを指定してください}"
 PROJECT="${GCP_PROJECT_ID:?GCP_PROJECT_ID を設定してください}"
 REGION="${GCP_REGION:-asia-northeast1}"
-SERVICE="${AGENT_SERVICE:-jci-sed-agent}"
+# LINE（提出・資料の作業）と管理画面（形式チェックで体裁を直す）の両方が議案書を読み書きする
+SERVICES="${AGENT_SERVICE:-jci-sed-agent} ${ADMIN_SERVICE:-jci-sed-admin}"
 EDITOR_NAME="doc-editor"
 EDITOR_SA="${EDITOR_NAME}@${PROJECT}.iam.gserviceaccount.com"
 RUNTIME_SA="app-runtime@${PROJECT}.iam.gserviceaccount.com"
@@ -35,8 +36,11 @@ gcloud iam service-accounts add-iam-policy-binding "${EDITOR_SA}" --project "${P
   --condition=None --quiet >/dev/null
 
 echo ">> Cloud Run に 04-委員会 のフォルダIDを設定"
-gcloud run services update "${SERVICE}" --region "${REGION}" --project "${PROJECT}" \
-  --update-env-vars "COMMITTEE_DOCS_FOLDER=${FOLDER_ID}" --quiet >/dev/null
+for service in ${SERVICES}; do
+  gcloud run services update "${service}" --region "${REGION}" --project "${PROJECT}" \
+    --update-env-vars "COMMITTEE_DOCS_FOLDER=${FOLDER_ID}" --quiet >/dev/null
+  echo "   ${service}"
+done
 
 cat <<EOF
 
