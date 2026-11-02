@@ -16,7 +16,9 @@ from app.models import (
     Member,
     Proposal,
     ProposalDeadlines,
+    ProposalSource,
     ProposalStage,
+    SchedulePoll,
     SedApproval,
     TargetScope,
     TargetScopeKind,
@@ -95,6 +97,30 @@ def test_package_excludes_other_meetings(repo):
     text = build_package(repo, repo.get_event("ev1"), now=NOW)
     assert "別会議の議案" not in text
     assert "上程先未定の議案" not in text
+
+
+def test_package_includes_proposals_via_decided_poll(repo):
+    """上程先が日程調整で決まった会議の議案も入れる（日程調整中・閉じた議案は入れない）。"""
+    repo.save_poll(SchedulePoll(poll_id="poll1", title="8月理事会", event_type=EventType.理事会,
+                                group_id="G", event_id="ev1"))
+    repo.save_poll(SchedulePoll(poll_id="poll2", title="未定の会議", event_type=EventType.理事会,
+                                group_id="G"))
+    repo.upsert_proposal(Proposal(
+        proposal_id="p3", title="2027年度 予算（案）", committee="執行部",
+        meeting_poll_id="poll1", stage=ProposalStage.goyaku,
+        storage_uri="https://drive.google.com/drive/folders/F1",
+        sources=[ProposalSource(name="予算書_様式A", url="https://docs.google.com/spreadsheets/d/s1/edit")],
+    ))
+    repo.upsert_proposal(Proposal(proposal_id="p4", title="日程調整中の議案",
+                                  meeting_poll_id="poll2"))
+    repo.upsert_proposal(Proposal(proposal_id="p5", title="閉じた議案",
+                                  meeting_poll_id="poll1", status="closed"))
+    text = build_package(repo, repo.get_event("ev1"), now=NOW)
+    assert "議案数: 3件" in text
+    assert "2027年度 予算（案）（執行部）" in text
+    assert "ステージ: 五役会" in text
+    assert "    - 予算書_様式A: https://docs.google.com/spreadsheets/d/s1/edit" in text
+    assert "日程調整中の議案" not in text and "閉じた議案" not in text
 
 
 def test_package_without_proposals(repo):
