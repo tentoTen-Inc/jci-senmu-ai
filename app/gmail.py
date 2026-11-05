@@ -205,3 +205,65 @@ def fetch_messages(*, label_name: str | None = None, newer_than: str | None = No
         message = _get(f"/messages/{ref['id']}", token, {"format": "full"})
         out.append(normalize(message, token))
     return out
+
+
+# --------------------------------------------------------------------------- #
+# 下書き（会議の案内メール。docs/meeting-notice-design.md §13: まず下書きに作り、専務が送る）
+# --------------------------------------------------------------------------- #
+class DraftError(Exception):
+    """下書きを作れなかった（権限が足りない・通信の失敗）。画面にそのまま出す。"""
+
+
+def _raw(*, to: list[str], cc: list[str], bcc: list[str], subject: str, html: str,
+         text: str) -> str:
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    if to:
+        msg["To"] = ", ".join(to)
+    if cc:
+        msg["Cc"] = ", ".join(cc)
+    if bcc:
+        msg["Bcc"] = ", ".join(bcc)
+    msg["Subject"] = subject
+    msg.set_content(text)
+    msg.add_alternative(html, subtype="html")
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+
+def _send_json(method: str, path: str, token: str, body: dict) -> dict:
+    req = urllib.request.Request(
+        f"{API_BASE}{path}", data=json.dumps(body).encode(), method=method,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def save_draft(*, to: list[str], cc: list[str], bcc: list[str], subject: str, html: str,
+               text: str, draft_id: str | None = None) -> str:
+    """LOM の Gmail に下書きを作る（draft_id があればその下書きを置き換える）。下書きの ID を返す。
+
+    下書きには gmail.compose の権限が要る（scripts/gmail_oauth_setup.py --with-send）。
+    """
+    import urllib.error
+
+    body = {"message": {"raw": _raw(to=to, cc=cc, bcc=bcc, subject=subject, html=html,
+                                    text=text)}}
+    token = _access_token()
+    try:
+        if draft_id:
+            try:
+                return _send_json("PUT", f"/drafts/{draft_id}", token, body)["id"]
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404:  # 送った・消した下書きは作り直す
+                    raise
+        return _send_json("POST", "/drafts", token, body)["id"]
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise DraftError("Gmail に下書きを作る権限がありません。LOM のアカウントで"
+                             "認可し直してください（scripts/gmail_oauth_setup.py --with-send）。"
+                             ) from exc
+        raise DraftError(f"Gmail に下書きを作れませんでした（{exc.code}）。") from exc
+    except OSError as exc:
+        raise DraftError("Gmail につながりませんでした。少し待ってからやり直してください。"
+                         ) from exc

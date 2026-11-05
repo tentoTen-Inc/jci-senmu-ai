@@ -175,6 +175,7 @@ class Repository(Protocol):
     def list_notice_templates(self) -> list[NoticeTemplate]: ...
     def save_meeting_dispatch(self, dispatch: MeetingDispatch) -> None: ...
     def get_meeting_dispatch(self, event_id: str) -> MeetingDispatch | None: ...
+    def list_meeting_dispatches(self) -> list[MeetingDispatch]: ...
 
 
 class InMemoryRepository:
@@ -570,6 +571,9 @@ class InMemoryRepository:
     def get_meeting_dispatch(self, event_id: str) -> MeetingDispatch | None:
         item = self._dispatches.get(event_id)
         return item.model_copy(deep=True) if item else None
+
+    def list_meeting_dispatches(self) -> list[MeetingDispatch]:
+        return [d.model_copy(deep=True) for d in self._dispatches.values()]
 
 
 def utcnow() -> datetime:

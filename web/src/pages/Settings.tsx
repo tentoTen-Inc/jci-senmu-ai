@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import NoticeMailSettings, { type NoticeMailValue } from "../components/NoticeMailSettings";
 import {
   Badge,
   Button,
@@ -21,7 +22,7 @@ type Settings = {
   quiet_hours: { start: string; end: string; tz: string };
   rate_limit: { per_member_per_day: number; global_per_min: number };
   line_groups: Record<string, string>;
-};
+} & NoticeMailValue;
 
 /** 日程調整などの既定の案内先にする LINE グループ（年度ごとに名前が変わる）。 */
 const GROUP_KEYS: { key: string; label: string }[] = [
@@ -191,6 +192,17 @@ export default function Settings() {
     }
   }
 
+  // 案内メールの欄に渡す値（保存した設定が変わったときだけ作り直す）
+  const noticeMail = useMemo<NoticeMailValue | null>(
+    () =>
+      settings && {
+        meeting_notices: settings.meeting_notices ?? {},
+        doc_number: settings.doc_number,
+        email_style: settings.email_style,
+      },
+    [settings]
+  );
+
   if (err) return <ErrorNote>{err}</ErrorNote>;
   if (!settings) return <Loading />;
 
@@ -207,7 +219,7 @@ export default function Settings() {
 
   return (
     <div className="max-w-4xl">
-      <PageHeader title="設定" description="年度の始まり、LINE への送信の止め方・送り方、出欠の催促のタイミングを決めます。" />
+      <PageHeader title="設定" description="年度の始まり、案内メール、LINE への送信の止め方・送り方、出欠の催促のタイミングを決めます。" />
 
       {/* ------------------------------------------------ 年度 */}
       <Panel title="年度（運用開始日）" action={<span className="text-ink-sub">いま: {fmtDate(settings.operation_start)}</span>}>
@@ -269,6 +281,9 @@ export default function Settings() {
           </Button>
         </div>
       </Panel>
+
+      {/* ------------------------------------------------ 案内メール */}
+      {noticeMail && <NoticeMailSettings value={noticeMail} saving={saving} onSave={(v) => save(v, "案内メールの設定を保存しました")} />}
 
       {/* ------------------------------------------------ 送信の一時停止 */}
       <Panel
