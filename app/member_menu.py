@@ -20,6 +20,7 @@ from linebot.v3.messaging import (
 
 from . import committee_docs, doc_session, feedback_box, lom, menu_lists
 from .assistant import answer_member_question
+from .attendance_intent import looks_like_attendance, try_attendance_intent
 from .calendar_intent import HELP_TEXT as CALENDAR_HELP_TEXT
 from .calendar_intent import can_edit_calendar, looks_like_calendar_write, try_calendar_intent
 from .doc_edit_intent import looks_like_doc_edit
@@ -271,6 +272,11 @@ def handle_member_text(
             return reply
 
     # ---- ここから自由文: 検索・回答のみ（書き込みなし） ----
+    # 出欠の連絡は読み取って確認を返す。登録は本人が［この内容で登録］を押したとき（F4-7）
+    if not t.startswith("出欠を回答") and looks_like_attendance(t):
+        reply = try_attendance_intent(repo, member, t, now=now, in_group=in_group)
+        if reply is not None:
+            return reply
     if committee_docs.is_board_member(member) and (looks_like_create(t) or looks_like_doc_edit(t)):
         return [_button(MENU_DOCS, DOCS_GUIDE)]
     if can_edit_calendar(member) and looks_like_calendar_write(t):

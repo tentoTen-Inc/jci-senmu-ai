@@ -44,6 +44,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import (
     ai_feedback,
+    attendance_intent,
     config,
     doc_links,
     doc_session,
@@ -477,6 +478,8 @@ def handle_postback(user_id: str, data: str, params: dict | None = None) -> list
         return handle_new_plan_postback(repo, member, data, now=datetime.now())
     if data.startswith(f"{ACTION_CREATE}|"):
         return handle_proposal_create_postback(repo, member, data, now=datetime.now())
+    if data.startswith(f"{attendance_intent.ACTION_CONFIRM}|"):
+        return attendance_intent.handle_confirm_postback(repo, member, data, now=datetime.now())
     if data.startswith(f"{ACTION_ESCALATE}|"):
         return handle_escalate_postback(repo, member, data, now=datetime.now())
     if data.startswith(f"{ai_feedback.ACTION_FEEDBACK}|"):

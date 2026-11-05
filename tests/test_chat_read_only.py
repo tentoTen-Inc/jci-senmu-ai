@@ -109,8 +109,13 @@ def repo(monkeypatch):
     r.upsert_event(Event(event_id="ev_nov", title="11月例会", type=EventType.例会,
                          datetime_start=NOW + timedelta(days=20), status=EventStatus.open))
     # 書き込みに至る処理（AI の解釈・ドライブ）は呼ばれてもいけない
-    for name in ("generate_calendar_intent", "generate_attendance_intent", "generate_doc_edit"):
+    for name in ("generate_calendar_intent", "generate_doc_edit"):
         monkeypatch.setattr(llm, name, lambda *a, _n=name, **k: pytest.fail(f"{_n} を呼んだ"))
+    # 出欠の連絡は読み取ってよい（確認を返すだけ。登録は本人が押したとき）。
+    # 読み取れた場合でも書き込まないことを確かめるため、いつも「欠席」と読み取らせる
+    monkeypatch.setattr(llm, "generate_attendance_intent", lambda *a, **k: llm.Generation(
+        text=json.dumps({"answers": [{"event_id": "ev_nov", "status": "欠席"}],
+                         "confident": True}, ensure_ascii=False)))
     monkeypatch.setattr(committee_docs, "_token", lambda: pytest.fail("ドライブに触れた"))
     monkeypatch.setattr(lom_drive, "copy", lambda *a, **k: pytest.fail("文書を作った"))
     # 質問への回答は「根拠なし」にして、自動の取次ぎが起きないことも確かめる
@@ -144,14 +149,16 @@ def test_write_like_text_returns_entry_button(repo, role, text, button):
     assert messages[0].quick_reply.items[0].action.data == f"menu|{button}"
 
 
-def test_attendance_free_text_answers_and_offers_button(repo):
-    # 短い文（「欠席」）は出欠の案内（出席・欠席のボタン）を見せるだけ。長い文は回答＋ボタン
-    short = handle_member_text(repo, MEMBERS["会員"], "来週の例会は欠席で", now=NOW)
-    assert [i.action.label for i in short[0].quick_reply.items] == ["出席", "Web出席", "欠席"]
+def test_attendance_free_text_asks_before_registering(repo):
+    # 出欠の連絡は読み取って確認を返す。押すまで登録しない（docs/nl-assistant-design.md §7）
+    from app.attendance_intent import handle_confirm_postback
+
     messages = handle_member_text(repo, MEMBERS["会員"], "11月例会は仕事のため欠席でお願いします",
                                   now=NOW)
-    labels = [i.action.label for i in messages[-1].quick_reply.items]
-    assert "予定と出欠" in labels and "意見箱に送る" in labels
+    item = messages[0].quick_reply.items[0]
+    assert item.action.label == "この内容で登録" and repo.writes == []
+    handle_confirm_postback(repo, MEMBERS["会員"], item.action.data, now=NOW)
+    assert repo.writes == ["upsert_attendance"]
 
 
 def test_non_board_write_like_text_is_just_a_question(repo):
