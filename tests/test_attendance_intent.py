@@ -158,13 +158,3 @@ def test_routing_menu_action_keeps_existing_prompt(monkeypatch, repo):
     assert called == []
     assert "8月例会" in messages[0].text
     assert [i.action.label for i in messages[0].quick_reply.items] == ["出席", "Web出席", "欠席"]
-
-
-def test_routing_falls_back_when_llm_unavailable(monkeypatch, repo):
-    def boom(*a, **kw):
-        raise RuntimeError("vertex unavailable")
-
-    monkeypatch.setattr(llm, "generate_attendance_intent", boom)
-    messages = handle_member_text(repo, member(repo), "例会は欠席します", now=NOW)
-    # 従来の出欠依頼メッセージ
-    assert [i.action.label for i in messages[0].quick_reply.items] == ["出席", "Web出席", "欠席"]

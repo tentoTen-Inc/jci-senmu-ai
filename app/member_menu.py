@@ -16,9 +16,11 @@ from linebot.v3.messaging import (
     QuickReply,
     QuickReplyItem,
     TextMessage,
+    URIAction,
 )
 
 from . import committee_docs, doc_session, feedback_box, lom, menu_lists
+from . import schedule_poll as sp
 from .assistant import answer_member_question
 from .calendar_intent import HELP_TEXT as CALENDAR_HELP_TEXT
 from .calendar_intent import can_edit_calendar, looks_like_calendar_write, try_calendar_intent
@@ -149,6 +151,16 @@ CALENDAR_GUIDE = (
     "チャットの文だけでは予定を書き換えません。"
 )
 ATTENDANCE_GUIDE = "出欠の回答は、下の［予定と出欠］から行えます。"
+#: 出欠の連絡らしい言葉（「欠席します」「参加が難しいです」「少し遅れます」）
+ATTENDANCE_CONTACT_WORDS = (
+    "出席", "欠席", "参加", "休み", "休ませ", "行けな", "行けま", "伺え", "遅れ", "遅刻", "早退",
+)
+#: 質問の文（「理事会の参加者は何人？」）は出欠の連絡として扱わず、これまでどおり答える
+QUESTION_WORDS = ("？", "?", "何", "誰", "いつ", "どこ", "教えて", "ですか", "ますか")
+ATTENDANCE_CONTACT_GUIDE = (
+    "出欠の登録・変更は、［予定と出欠］の画面からお願いします。"
+    "チャットのメッセージでは出欠は変わりません。"
+)
 HELP_GUIDE = (
     "【専務AIの使い方】\n"
     "・ふだんのトークは、質問への回答だけを行います（資料や予定を書き換えることはありません）。\n"
@@ -167,6 +179,28 @@ def _button(label: str, text: str) -> TextMessage:
     """作業を始めるボタン（押すとメニューのボタンと同じ流れになる）だけを付けた案内。"""
     return TextMessage(text=text, quick_reply=QuickReply(items=[QuickReplyItem(
         action=PostbackAction(label=label, data=f"menu|{label}", display_text=label))]))
+
+
+def looks_like_attendance_contact(text: str) -> bool:
+    """出欠の連絡（「本日の五役は欠席になりそうです」）らしいか。質問の文は含めない。"""
+    return (any(k in text for k in ATTENDANCE_CONTACT_WORDS)
+            and not any(k in text for k in QUESTION_WORDS))
+
+
+def _events_item() -> QuickReplyItem:
+    """［予定と出欠］。LIFF が使えれば画面を直接開き、なければトークに一覧を返すボタン。"""
+    if sp.is_configured():
+        return QuickReplyItem(action=URIAction(
+            label=MENU_EVENTS, uri=f"https://liff.line.me/{sp.liff_id()}?view=events"))
+    return QuickReplyItem(action=PostbackAction(
+        label=MENU_EVENTS, data=f"menu|{MENU_EVENTS}", display_text=MENU_EVENTS))
+
+
+def _attendance_contact_guide(member: Member, in_group: bool) -> TextMessage:
+    """チャットで届いた出欠の連絡には、［予定と出欠］の案内だけを返す（読み取って登録はしない）。"""
+    head = f"{member.name}さん、" if in_group else ""
+    return TextMessage(text=head + ATTENDANCE_CONTACT_GUIDE,
+                       quick_reply=QuickReply(items=[_events_item()]))
 
 
 def _active_state(repo: Repository, member: Member, now: datetime) -> ChatState | None:
@@ -235,12 +269,10 @@ def _menu(repo: Repository, member: Member, label: str, now: datetime) -> list[M
     return [build_menu()]
 
 
-def _with_button(messages: list[Message], label: str) -> list[Message]:
+def _with_button(messages: list[Message], item: QuickReplyItem) -> list[Message]:
     """回答の最後のメッセージに、作業を始めるボタンを足す（既存のクイックリプライは残す）。"""
     last = messages[-1]
     if isinstance(last, TextMessage):
-        item = QuickReplyItem(action=PostbackAction(label=label, data=f"menu|{label}",
-                                                    display_text=label))
         items = list(last.quick_reply.items) if last.quick_reply else []
         last.quick_reply = QuickReply(items=[*items, item][:13])
     return messages
@@ -271,6 +303,9 @@ def handle_member_text(
             return reply
 
     # ---- ここから自由文: 検索・回答のみ（書き込みなし） ----
+    # 出欠の連絡は AI で読み取らず、［予定と出欠］の画面で本人に登録・変更してもらう
+    if not t.startswith(MENU_ANSWER) and looks_like_attendance_contact(t):
+        return [_attendance_contact_guide(member, in_group)]
     if committee_docs.is_board_member(member) and (looks_like_create(t) or looks_like_doc_edit(t)):
         return [_button(MENU_DOCS, DOCS_GUIDE)]
     if can_edit_calendar(member) and looks_like_calendar_write(t):
@@ -295,7 +330,8 @@ def handle_member_text(
     messages = answer_member_question(repo, member, t, now=now,
                                       group_id=group_id if in_group else None)
     if messages is not None:
-        return _with_button(messages, MENU_EVENTS) if attendance else messages
+        return _with_button(messages, _events_item()) if attendance else messages
     if attendance:
-        return [_button(MENU_EVENTS, ATTENDANCE_GUIDE)]
+        return [TextMessage(text=ATTENDANCE_GUIDE,
+                            quick_reply=QuickReply(items=[_events_item()]))]
     return [build_menu(f"「{text}」について、以下からお選びください。")]
