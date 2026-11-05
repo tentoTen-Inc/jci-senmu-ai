@@ -109,7 +109,7 @@ def repo(monkeypatch):
     r.upsert_event(Event(event_id="ev_nov", title="11月例会", type=EventType.例会,
                          datetime_start=NOW + timedelta(days=20), status=EventStatus.open))
     # 書き込みに至る処理（AI の解釈・ドライブ）は呼ばれてもいけない
-    for name in ("generate_calendar_intent", "generate_attendance_intent", "generate_doc_edit"):
+    for name in ("generate_calendar_intent", "generate_doc_edit"):
         monkeypatch.setattr(llm, name, lambda *a, _n=name, **k: pytest.fail(f"{_n} を呼んだ"))
     monkeypatch.setattr(committee_docs, "_token", lambda: pytest.fail("ドライブに触れた"))
     monkeypatch.setattr(lom_drive, "copy", lambda *a, **k: pytest.fail("文書を作った"))

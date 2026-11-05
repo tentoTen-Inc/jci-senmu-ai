@@ -10,7 +10,6 @@ from app.llm import Generation
 
 @pytest.mark.parametrize("task, model", [
     ("member_qa", "gemini-2.5-flash"),        # 返事を待たせる → 速さ優先
-    ("attendance_intent", "gemini-2.5-flash"),
     ("calendar_intent", "gemini-2.5-flash"),
     ("proposal_review", "gemini-2.5-pro"),    # 腰を据えて読む → 品質優先
     ("external_notice_digest", "gemini-2.5-pro"),
@@ -67,7 +66,7 @@ def test_flash_is_cheaper_than_pro():
 # 「考える時間」と REST 呼び出し（2026-10-12: Flash 既定は 37 秒、上限0で 1.8 秒）
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("task, budget", [
-    ("member_qa", 0), ("attendance_intent", 0), ("calendar_intent", 512),
+    ("member_qa", 0), ("calendar_intent", 512),
     ("proposal_review", None), ("survey_digest", None),
 ])
 def test_thinking_budget_per_task(task, budget, monkeypatch):
