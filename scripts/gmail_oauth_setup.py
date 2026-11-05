@@ -31,7 +31,8 @@ Google は OOB（`urn:ietf:wg:oauth:2.0:oob`＝コードを画面表示する方
 スコープは既定で gmail.readonly のみ（送信・削除はしない）。
 議案（事業計画書）の作成（docs/proposal-ledger-design.md §6）を使うときは `--with-drive` を付けて
 drive スコープも許可する（LOM 公式アカウントとしてフォルダ・文書を作るため）。
-見積依頼などのメール送信（段階4）を使うときは `--with-send` で gmail.send も許可する。
+見積依頼などのメール送信（段階4）や、会議の案内メールの下書き（docs/meeting-notice-design.md）を
+使うときは `--with-send` で gmail.send と gmail.compose も許可する。
 カレンダーの予定に Meet を付けて自動録画にする（docs/calendar-design.md §4.5）ときは
 `--with-calendar` で calendar.events と meetings.space.settings も許可する。
 クライアントID・シークレットは、登録済みのものを `--client-from-secrets` で
@@ -60,6 +61,8 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+#: 会議の案内メールを下書きに作る（docs/meeting-notice-design.md §13）
+COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
 CALENDAR_SCOPES = ("https://www.googleapis.com/auth/calendar.events",
                    "https://www.googleapis.com/auth/meetings.space.settings")
 DEFAULT_PORT = 8765
@@ -81,7 +84,7 @@ def scopes(*, with_drive: bool = False, with_send: bool = False,
     if with_drive:
         picked.append(DRIVE_SCOPE)
     if with_send:
-        picked.append(SEND_SCOPE)
+        picked.extend((SEND_SCOPE, COMPOSE_SCOPE))
     if with_calendar:
         picked.extend(CALENDAR_SCOPES)
     return " ".join(picked)

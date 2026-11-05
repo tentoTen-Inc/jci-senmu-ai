@@ -533,3 +533,7 @@ class FirestoreRepository:
     def get_meeting_dispatch(self, event_id: str) -> MeetingDispatch | None:
         snap = self._db.collection(COL_DISPATCHES).document(event_id).get()
         return MeetingDispatch.model_validate(snap.to_dict()) if snap.exists else None
+
+    def list_meeting_dispatches(self) -> list[MeetingDispatch]:
+        return [MeetingDispatch.model_validate(d.to_dict())
+                for d in self._db.collection(COL_DISPATCHES).stream()]

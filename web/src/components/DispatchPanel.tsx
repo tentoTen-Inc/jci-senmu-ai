@@ -1,4 +1,4 @@
-// 会議の「案内・配信」（docs/meeting-notice-design.md §7.1・段階 A: LINE）
+// 会議の「案内・配信」（docs/meeting-notice-design.md §7.1・段階 A: LINE、段階 B: 案内メールの下書き）
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -12,8 +12,35 @@ type Sent = {
   sent_at: string | null;
   sent_by: string | null;
 };
+type Drafted = {
+  template_id: string | null;
+  subject: string | null;
+  doc_number: string | null;
+  draft_id: string | null;
+  drafted_at: string | null;
+  drafted_by: string | null;
+};
+type EmailView = {
+  templates: { template_id: string; name: string; purpose: string }[];
+  template_id: string | null;
+  preview: { subject: string; body: string; html: string; text: string } | null;
+  error: string | null;
+  hints: string[];
+  recipients: {
+    mode: "bcc" | "to";
+    to: string[];
+    cc: string[];
+    bcc: string[];
+    count: number;
+    targets: number;
+    missing: { member_id: string; name: string }[];
+  };
+  doc_number: string | null;
+  account: string | null;
+};
 type DispatchView = {
-  dispatch: { agenda_url: string | null; opinion_url: string | null; line: Sent; history: Sent[] };
+  dispatch: { agenda_url: string | null; opinion_url: string | null; line: Sent; history: Sent[]; email: Drafted };
+  email: EmailView;
   templates: { template_id: string; name: string; purpose: string; mention: string }[];
   template_id: string | null;
   mention: string;
@@ -39,16 +66,20 @@ export default function DispatchPanel({ eventId }: { eventId: string }) {
   const [view, setView] = useState<DispatchView | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [templateId, setTemplateId] = useState<string | null>(null);
+  const [emailTemplateId, setEmailTemplateId] = useState<string | null>(null);
   const [urls, setUrls] = useState({ agenda_url: "", opinion_url: "" });
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(
-    async (tid?: string | null) => {
+    async (tid?: string | null, etid?: string | null) => {
       try {
-        const q = tid ? `?template_id=${encodeURIComponent(tid)}` : "";
-        const v = await api<DispatchView>(`/events/${eventId}/dispatch${q}`);
+        const q = new URLSearchParams();
+        if (tid) q.set("template_id", tid);
+        if (etid) q.set("email_template_id", etid);
+        const v = await api<DispatchView>(`/events/${eventId}/dispatch${q.size ? `?${q}` : ""}`);
         setView(v);
         setTemplateId(v.template_id);
+        setEmailTemplateId(v.email.template_id);
         setUrls({ agenda_url: v.dispatch.agenda_url ?? "", opinion_url: v.dispatch.opinion_url ?? "" });
         setErr(null);
       } catch (e) {
@@ -64,10 +95,9 @@ export default function DispatchPanel({ eventId }: { eventId: string }) {
   async function saveUrls() {
     setBusy(true);
     try {
-      const v = await api<DispatchView>(`/events/${eventId}/dispatch`, { method: "PUT", body: JSON.stringify(urls) });
-      setView(v);
+      await api<DispatchView>(`/events/${eventId}/dispatch`, { method: "PUT", body: JSON.stringify(urls) });
       toast("リンクを保存しました");
-      if (templateId && templateId !== v.template_id) load(templateId);
+      await load(templateId, emailTemplateId);
     } catch (e) {
       toast((e as Error).message, "error");
     } finally {
@@ -106,9 +136,47 @@ export default function DispatchPanel({ eventId }: { eventId: string }) {
         body: JSON.stringify({ template_id: templateId, expected_group_id: d.group_id }),
       });
       setView(v);
+      setEmailTemplateId(v.email.template_id);
       toast("LINE に送りました");
     } catch (e) {
       toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function draft() {
+    if (!view || !emailTemplateId || !view.email.preview) return;
+    const e = view.email;
+    const r = e.recipients;
+    const ok = await confirm({
+      title: view.dispatch.email.draft_id ? "下書きを作り直しますか？" : "Gmail に下書きを作りますか？",
+      body: (
+        <>
+          <p>
+            宛先: <b>{r.mode === "bcc" ? `BCC ${r.bcc.length}人` : `To ${r.to.length}人`}</b>
+            {r.cc.length > 0 && `・CC ${r.cc.length}人`}
+            {r.missing.length > 0 && <span className="text-hold">（アドレスのない {r.missing.length}人には届きません）</span>}
+          </p>
+          {e.doc_number && <p className="mt-1">文書番号: <b>{e.doc_number}</b></p>}
+          {view.dispatch.email.draft_id && <p className="mt-1">前に作った下書きを、今の内容で置き換えます。</p>}
+          <p className="mt-1">まだ送りません。{e.account ?? "LOM"} の Gmail の下書きを確かめて、そこから送ってください。</p>
+        </>
+      ),
+      confirmLabel: "下書きを作る",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const v = await api<DispatchView>(`/events/${eventId}/dispatch/email-draft`, {
+        method: "POST",
+        body: JSON.stringify({ template_id: emailTemplateId, expected_count: r.count }),
+      });
+      setView(v);
+      setEmailTemplateId(v.email.template_id);
+      toast("Gmail に下書きを作りました");
+    } catch (err) {
+      toast((err as Error).message, "error");
     } finally {
       setBusy(false);
     }
@@ -149,7 +217,7 @@ export default function DispatchPanel({ eventId }: { eventId: string }) {
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <div>
           <Field label="LINE のテンプレート">
-            <select className="w-full" value={templateId ?? ""} onChange={(e) => load(e.target.value)}>
+            <select className="w-full" value={templateId ?? ""} onChange={(e) => load(e.target.value, emailTemplateId)}>
               {view.templates.map((t) => (
                 <option key={t.template_id} value={t.template_id}>{t.name}</option>
               ))}
@@ -196,6 +264,14 @@ export default function DispatchPanel({ eventId }: { eventId: string }) {
       </div>
       {dirty && <p className="mt-1 text-right text-xs text-ink-sub">リンクを保存してから送ってください。</p>}
 
+      <EmailSection
+        view={view}
+        templateId={emailTemplateId}
+        busy={busy || dirty}
+        onTemplate={(id) => load(templateId, id)}
+        onDraft={draft}
+      />
+
       {view.dispatch.history.length > 0 && (
         <details className="mt-4 text-sm">
           <summary className="cursor-pointer font-bold text-ink-sub">送った記録（{view.dispatch.history.length}件）</summary>
@@ -212,5 +288,106 @@ export default function DispatchPanel({ eventId }: { eventId: string }) {
         </details>
       )}
     </Panel>
+  );
+}
+
+/** 案内メール（段階 B）: テンプレート・宛先・文書番号・送る HTML のプレビュー・下書きを作るボタン */
+function EmailSection({
+  view,
+  templateId,
+  busy,
+  onTemplate,
+  onDraft,
+}: {
+  view: DispatchView;
+  templateId: string | null;
+  busy: boolean;
+  onTemplate: (id: string) => void;
+  onDraft: () => void;
+}) {
+  const e = view.email;
+  const r = e.recipients;
+  const drafted = view.dispatch.email;
+  const gmailUrl = `https://mail.google.com/mail/u/${e.account ? `?authuser=${encodeURIComponent(e.account)}` : "0/"}#drafts`;
+  return (
+    <div className="mt-6 border-t border-gray-100 pt-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-bold">案内メール</span>
+        <span className="text-xs text-ink-sub">LOM の Gmail に下書きを作ります。送るのは Gmail で確かめてから。</span>
+        {drafted.drafted_at && <Badge tone="green">下書きあり {fmtDateTime(drafted.drafted_at)}</Badge>}
+      </div>
+      {e.templates.length === 0 ? (
+        <p className="text-sm text-ink-sub">
+          この会議で使えるメールのテンプレートがありません。<Link className="text-line-ink underline" to="/notice-templates">テンプレート</Link>で作ってください。
+        </p>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <Field label="メールのテンプレート">
+              <select className="w-full" value={templateId ?? ""} onChange={(ev) => onTemplate(ev.target.value)}>
+                {e.templates.map((t) => (
+                  <option key={t.template_id} value={t.template_id}>{t.name}</option>
+                ))}
+              </select>
+            </Field>
+            <div className="mt-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm">
+              <div className="text-xs text-ink-sub">宛先</div>
+              <div className="font-bold">
+                {r.mode === "bcc" ? `BCC ${r.bcc.length}人` : `To ${r.to.length}人`}
+                {r.cc.length > 0 && `・CC ${r.cc.length}人`}
+                <span className="ml-1 font-normal text-ink-sub">（対象 {r.targets}人）</span>
+              </div>
+              {r.mode === "bcc" && r.to.length > 0 && <div className="mt-1 text-xs text-ink-sub">To: {r.to.join(", ")}</div>}
+              <details className="mt-1 text-xs text-ink-sub">
+                <summary className="cursor-pointer">アドレスを見る</summary>
+                <div className="mt-1 break-all">{[...r.to, ...r.cc, ...r.bcc].join(", ")}</div>
+              </details>
+              {r.missing.length > 0 && (
+                <div className="mt-2 text-xs text-hold">
+                  メールアドレスがない人（届きません）: {r.missing.map((m) => m.name).join("、")}。
+                  <Link className="underline" to="/members">会員</Link>の「メール」に入れてください。
+                </div>
+              )}
+            </div>
+            <div className="mt-3 text-xs text-ink-sub">
+              {e.doc_number
+                ? drafted.doc_number === e.doc_number
+                  ? `文書番号: ${e.doc_number}（この会議で使っている番号）`
+                  : `文書番号: 下書きを作るときに ${e.doc_number} を使います`
+                : "文書番号: 付けない（設定 → 案内メール）"}
+            </div>
+            {e.hints.length > 0 && (
+              <ul className="mt-2 list-disc pl-5 text-xs text-hold">
+                {e.hints.map((h) => <li key={h}>{h}</li>)}
+              </ul>
+            )}
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-bold text-ink-sub">プレビュー</div>
+            {e.error ? (
+              <ErrorNote>{e.error}</ErrorNote>
+            ) : (
+              <div className="rounded-2xl border border-gray-200">
+                <div className="border-b border-gray-200 px-4 py-2 text-sm">
+                  <span className="text-ink-sub">件名: </span>
+                  <span className="font-bold">{e.preview?.subject}</span>
+                </div>
+                <iframe title="案内メールのプレビュー" sandbox="" className="h-96 w-full rounded-b-2xl bg-white" srcDoc={e.preview?.html ?? ""} />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {e.templates.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
+          {drafted.draft_id && (
+            <a className="text-sm text-line-ink underline" href={gmailUrl} target="_blank" rel="noreferrer">Gmail の下書きを開く</a>
+          )}
+          <Button variant="primary" onClick={onDraft} disabled={busy || !e.preview || r.count === 0}>
+            {drafted.draft_id ? "下書きを作り直す" : "Gmail に下書きを作る"}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

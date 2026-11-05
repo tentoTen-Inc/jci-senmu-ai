@@ -44,7 +44,21 @@ const FIELD_LABELS: Record<string, string> = {
   online: "オンラインがあるとき（ブロック）",
   agenda: "アジェンダがあるとき（ブロック）",
   opinion: "意見書があるとき（ブロック）",
+  audience: "宛名（理事各位）",
+  "sender.title": "差出人の肩書",
+  "sender.name": "差出人の名前",
+  doc_number: "文書番号",
+  issued_on: "発信日（11月6日(金)）",
+  issued_on_wareki: "発信日（令和8年11月6日）",
 };
+/** メールの行の頭に書く寄せ方（docs/meeting-notice-design.md §4.3） */
+const MARKS: { mark: string; label: string }[] = [
+  { mark: "[右] ", label: "右寄せ" },
+  { mark: "[中] ", label: "中央" },
+  { mark: "[題] ", label: "題（中央・大きく・太字）" },
+  { mark: "[字下げ] ", label: "字下げ" },
+];
+type Preview = { errors: string[]; text: string | null; html?: string | null; subject?: string | null };
 const BLOCKS = new Set(["late", "online", "agenda", "opinion"]);
 
 const EMPTY: Omit<Template, "template_id" | "builtin" | "updated_at" | "updated_by"> = {
@@ -66,7 +80,7 @@ export default function NoticeTemplates() {
   const [editing, setEditing] = useState<(typeof EMPTY & { template_id?: string; builtin?: boolean }) | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [previewEvent, setPreviewEvent] = useState("");
-  const [preview, setPreview] = useState<{ errors: string[]; text: string | null } | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [saving, setSaving] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
@@ -97,7 +111,7 @@ export default function NoticeTemplates() {
         setPreview(
           await api("/notice-templates/preview", {
             method: "POST",
-            body: JSON.stringify({ body: editing.body, subject: editing.subject, event_id: previewEvent || null }),
+            body: JSON.stringify({ body: editing.body, subject: editing.subject, channel: editing.channel, event_id: previewEvent || null }),
           })
         );
       } catch (e) {
@@ -171,7 +185,7 @@ export default function NoticeTemplates() {
                 {Object.entries(PURPOSES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </select>
             </Field>
-            <Field label="送り方" hint="メールの送信は次の段階で使えるようになります">
+            <Field label="送り方" hint="メールは LOM の Gmail に下書きを作ります">
               <select className="w-full" value={editing.channel} onChange={(e) => setEditing({ ...editing, channel: e.target.value as Template["channel"] })}>
                 <option value="line">LINE</option>
                 <option value="email">メール</option>
@@ -230,10 +244,23 @@ export default function NoticeTemplates() {
                 <Button size="sm" variant="ghost" title="{{#proposals}}…{{/proposals}}"
                   onClick={() => insert("{{#proposals}}{{no}}　{{title}}\n{{/proposals}}")}>議案の一覧（繰り返し）</Button>
               </div>
+              {editing.channel === "email" && (
+                <>
+                  <div className="mt-2 text-xs text-ink-sub">行の寄せ方（行の頭に入れます）</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {MARKS.map((m) => (
+                      <Button key={m.mark} size="sm" variant="ghost" title={m.mark.trim()} onClick={() => insert(m.mark)}>{m.label}</Button>
+                    ))}
+                    <Button size="sm" variant="ghost" title="[文字](https://…)" onClick={() => insert("[リンクの文字](https://)")}>リンク</Button>
+                  </div>
+                </>
+              )}
               <p className="mt-2 text-xs leading-relaxed text-ink-faint">
                 書き方: {"{{名前}}"} 値 ／ {"{{#名前}}…{{/名前}}"} 値があるとき（議案は議案の数だけ繰り返し）／
                 {" {{^名前}}…{{/名前}}"} 値がないとき ／ {"{{?名前}}"} 値がなければその行ごと消す。
                 議案の中では {"{{no}} {{title}} {{url}} {{presenter}}"} が使えます。
+                {editing.channel === "email" &&
+                  " メールは行の頭の [右] [中] [題] [字下げ] で寄せ方を決め、[文字](https://…) でリンクにします。何もなければ左寄せです。"}
               </p>
             </div>
             <div>
@@ -248,6 +275,15 @@ export default function NoticeTemplates() {
               <div className="mt-2">
                 {preview?.errors.length ? (
                   <ErrorNote>{preview.errors.join("／")}</ErrorNote>
+                ) : editing.channel === "email" ? (
+                  <div className="rounded-2xl border border-gray-200">
+                    <div className="border-b border-gray-200 px-4 py-2 text-sm">
+                      <span className="text-ink-sub">件名: </span>
+                      <span className="font-bold">{preview?.subject ?? ""}</span>
+                    </div>
+                    {/* 送る HTML をそのまま見せる（スクリプトは動かさない） */}
+                    <iframe title="メールのプレビュー" sandbox="" className="h-96 w-full rounded-b-2xl bg-white" srcDoc={preview?.html ?? ""} />
+                  </div>
                 ) : (
                   <div className="min-h-24 whitespace-pre-wrap break-all rounded-2xl rounded-tl-sm bg-line-soft px-4 py-3 text-sm leading-relaxed">
                     {editing.channel === "line" && editing.mention === "all" && <span className="font-bold text-line-ink">@All </span>}

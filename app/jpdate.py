@@ -39,9 +39,10 @@ def month_day(dt: datetime) -> str:
     return f"{dt.month}月{dt.day}日({weekday(dt)})"
 
 
-def wareki_date(dt: datetime) -> str:
-    """「令和8年11月5日(木)」（令和より前は西暦のまま）。"""
+def wareki_date(dt: datetime, *, weekday: bool = True) -> str:
+    """「令和8年11月5日(木)」（令和より前は西暦のまま）。weekday=False で曜日を付けない。"""
+    day = month_day(dt) if weekday else f"{dt.month}月{dt.day}日"
     if (dt.year, dt.month) < (2019, 5):
-        return f"{dt.year}年{month_day(dt)}"
+        return f"{dt.year}年{day}"
     year = dt.year - 2018
-    return f"令和{'元' if year == 1 else year}年{month_day(dt)}"
+    return f"令和{'元' if year == 1 else year}年{day}"

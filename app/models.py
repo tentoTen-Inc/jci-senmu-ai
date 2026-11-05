@@ -190,13 +190,14 @@ class Member(BaseModel):
         return names
 
     @property
+    def is_current(self) -> bool:
+        """在籍していて、案内を送る会員区分（退会・OB等でない）か。LINE の連携は問わない。"""
+        return self.status == MemberStatus.active and self.member_type in _DELIVERABLE_TYPES
+
+    @property
     def is_deliverable(self) -> bool:
         """配信対象（有効・LINE紐付け済み・退会/OB等でない）か。"""
-        return (
-            self.status == MemberStatus.active
-            and self.line_user_id is not None
-            and self.member_type in _DELIVERABLE_TYPES
-        )
+        return self.is_current and self.line_user_id is not None
 
 
 class InviteCode(BaseModel):
@@ -409,6 +410,33 @@ class RateLimit(BaseModel):
     global_per_min: int = 30
 
 
+class MeetingNoticeSetting(BaseModel):
+    """会議体ごとの案内メールの設定（docs/meeting-notice-design.md §6）。"""
+
+    audience: str = ""  # 宛名（例: 理事各位）
+    sender_role: str = ""  # 差出人の役職。会員の役職から名前を引く（例: 理事長）
+    sender_title: str = ""  # 文中の肩書（空なら sender_role）
+    to_mode: str = "bcc"  # bcc（既定。To は LOM のアドレス）| to（To に並べる）
+    cc_roles: list[str] = Field(default_factory=list)  # CC に入れる役職（例: 専務理事）
+
+
+class DocNumberSetting(BaseModel):
+    """文書番号（§6.3）。番号は下書きを作るときに決め、同じ会議では使い回す。"""
+
+    enabled: bool = False
+    format: str = "{prefix}第{term}-{seq}号"
+    prefix: str = ""
+    term: str = ""
+    digits: int = 3  # 連番の桁（0 で埋める）
+    #: 年度ごとの最初の番号（手で付けた番号の続きから始めるとき）。年度 → 番号
+    start_seq: dict[str, int] = Field(default_factory=dict)
+
+
+class EmailStyle(BaseModel):
+    font_family: str = "Arial"
+    font_size: int = 11  # pt
+
+
 class Settings(BaseModel):
     kill_switch: bool = False
     quiet_hours: QuietHours = Field(default_factory=QuietHours)
@@ -421,6 +449,13 @@ class Settings(BaseModel):
     #: 日程調整などの既定の案内先にする LINE グループの ID（goyaku=五役 / riji=理事会 /
     #: all=会員全員）。年度ごとにグループが替わるので設定に置く（管理画面で一覧から選ぶ）
     line_groups: dict[str, str] = Field(default_factory=dict)
+    #: 会議体（会議の種類）ごとの案内メールの宛名・差出人・宛先の入れ方
+    #: （docs/meeting-notice-design.md §6）
+    meeting_notices: dict[str, MeetingNoticeSetting] = Field(default_factory=dict)
+    #: 案内文の文書番号（§6.3）。使わない LOM は enabled=False のまま
+    doc_number: DocNumberSetting = Field(default_factory=lambda: DocNumberSetting())
+    #: 案内メールの文字（§4.3）
+    email_style: EmailStyle = Field(default_factory=lambda: EmailStyle())
 
 
 class DeliveryJob(BaseModel):
@@ -995,13 +1030,31 @@ class LineDispatch(BaseModel):
     sent_by: str | None = None
 
 
+class EmailDispatch(BaseModel):
+    """会議の案内メール（段階 B は LOM の Gmail の下書きに作る）。"""
+
+    template_id: str | None = None
+    subject: str | None = None
+    text: str | None = None  # 差し込み後の本文（レイアウト記法のまま）
+    to: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+    fiscal_year: int | None = None
+    doc_seq: int | None = None  # 使った文書番号の連番（同じ会議で作り直すときは使い回す）
+    doc_number: str | None = None
+    draft_id: str | None = None  # Gmail の下書き
+    drafted_at: datetime | None = None
+    drafted_by: str | None = None
+
+
 class MeetingDispatch(BaseModel):
-    """会議ごとの配信物（§8）。段階 A は LINE と、手で入れるアジェンダ・意見書の URL。"""
+    """会議ごとの配信物（§8）。アジェンダ・意見書の URL（手で入れる）、LINE、案内メール。"""
 
     event_id: str
     agenda_url: str | None = None
     opinion_url: str | None = None
     line: LineDispatch = Field(default_factory=LineDispatch)
+    email: EmailDispatch = Field(default_factory=EmailDispatch)
     history: list[LineDispatch] = Field(default_factory=list)  # 送った LINE（新しいものが最後）
     updated_at: datetime | None = None
     updated_by: str | None = None

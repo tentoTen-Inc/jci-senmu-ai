@@ -22,11 +22,13 @@ TOKEN = re.compile(r"\{\{\s*([#^/?]?)\s*([a-z_][a-z0-9_.]*)\s*\}\}")
 #: LINE の1通の上限（文字）
 LINE_LIMIT = 5000
 
-#: 使える名前（§4.2）。段階 B 以降で増やす
+#: 使える名前（§4.2）
 FIELDS = {
     "lom.name", "lom.short_name", "lom.bot_name", "fiscal_year",
     "event.title", "event.date", "event.date_wareki", "event.time", "event.place",
     "event.online_url", "agenda.url", "opinion.url",
+    # 案内メール（段階 B）: 宛名・差出人は会議体ごとの設定、文書番号は下書きを作るときに決まる
+    "audience", "sender.title", "sender.name", "doc_number", "issued_on", "issued_on_wareki",
 }
 FLAGS = {"late", "online", "agenda", "opinion"}
 LISTS = {"proposals": {"no", "title", "url", "presenter", "first", "index"}}
@@ -230,6 +232,9 @@ def sample_context() -> dict:
         "event.place": "会館 or オンライン", "event.online_url": "https://meet.google.com/xxx-xxxx-xxx",
         "agenda.url": "https://docs.google.com/document/d/（アジェンダ）",
         "opinion.url": "https://docs.google.com/spreadsheets/d/（意見書）",
+        "audience": "理事各位", "sender.title": "理事長", "sender.name": "（理事長の名前）",
+        "doc_number": "○○発第27-001号", "issued_on": "1月5日(火)",
+        "issued_on_wareki": "令和9年1月5日",
         "online": True, "agenda": True, "opinion": True, "late": False,
         "proposals": [
             {"no": "第1号議案", "title": "年間計画（案）について", "url": "https://example.org/1",

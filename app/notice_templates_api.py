@@ -8,6 +8,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from . import meeting_dispatch as md
+from . import notice_layout as nl
 from . import notice_template as nt
 from .audit import write_audit
 from .deps import get_repo
@@ -108,21 +109,28 @@ def reset_template(template_id: str,
 class PreviewBody(BaseModel):
     body: str
     subject: str = ""
+    channel: str = "line"
     event_id: str | None = None
 
 
 @router.post("/notice-templates/preview")
 def preview(req: PreviewBody):
-    """書きかけの本文を、選んだ会議（なければ例の値）で差し込んで見せる。"""
+    """書きかけの本文を、選んだ会議（なければ例の値）で差し込んで見せる。メールは HTML も返す。"""
     errors = nt.validate(req.body, req.subject)
     if errors:
-        return {"errors": errors, "text": None, "subject": None}
+        return {"errors": errors, "text": None, "subject": None, "html": None}
     repo = get_repo()
     event = repo.get_event(req.event_id) if req.event_id else None
     now = datetime.now()
-    ctx = md.context(repo, event, md.get_dispatch(repo, event.event_id), now) if event \
-        else nt.sample_context()
-    return {"errors": [], "text": nt.render(req.body, ctx),
+    if event:
+        dispatch = md.get_dispatch(repo, event.event_id)
+        ctx = md.email_context(repo, event, dispatch, now)[0] if req.channel == "email" \
+            else md.context(repo, event, dispatch, now)
+    else:
+        ctx = nt.sample_context()
+    text = nt.render(req.body, ctx)
+    html = nl.to_html(text, repo.get_settings().email_style) if req.channel == "email" else None
+    return {"errors": [], "text": text, "html": html,
             "subject": nt.render(req.subject, ctx) if req.subject else None}
 
 
@@ -141,8 +149,9 @@ def _error(exc: md.DispatchError) -> HTTPException:
 
 
 @router.get("/events/{event_id}/dispatch")
-def get_dispatch(event_id: str, template_id: str | None = None):
-    return md.view(get_repo(), _event(event_id), datetime.now(), template_id)
+def get_dispatch(event_id: str, template_id: str | None = None,
+                 email_template_id: str | None = None):
+    return md.view(get_repo(), _event(event_id), datetime.now(), template_id, email_template_id)
 
 
 class DispatchBody(BaseModel):
@@ -180,3 +189,24 @@ def send_line(event_id: str, body: SendBody,
     except nt.TemplateError as exc:
         raise HTTPException(400, str(exc)) from exc
     return md.view(repo, event, datetime.now(), body.template_id)
+
+
+class DraftBody(BaseModel):
+    template_id: str
+    expected_count: int
+
+
+@router.post("/events/{event_id}/dispatch/email-draft")
+def make_email_draft(event_id: str, body: DraftBody,
+                     x_goog_authenticated_user_email: str | None = Header(default=None)):
+    """案内メールを LOM の Gmail の下書きに作る（送るのは専務が Gmail で）。"""
+    repo, event = get_repo(), _event(event_id)
+    try:
+        md.make_draft(repo, event, template_id=body.template_id,
+                      expected_count=body.expected_count,
+                      actor=_actor(x_goog_authenticated_user_email), now=datetime.now())
+    except md.DispatchError as exc:
+        raise _error(exc) from exc
+    except nt.TemplateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return md.view(repo, event, datetime.now(), None, body.template_id)
