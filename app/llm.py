@@ -67,33 +67,22 @@ _NOTICE_PROMPT = """あなたは青年会議所(JC)の専務理事を補佐す�
 """
 
 
-_INTENT_PROMPT = """会員からの連絡（LINE）が、会議・例会への出欠の連絡かどうかを読み取ってください。
-
-今日: {today}
+_INTENT_PROMPT = """会員のメッセージから、どのイベントの出欠をどう回答したいのかを推定してください。
 
 厳守事項:
-- 出欠の連絡でなければ（質問・雑談・他人の出欠の話など）answers を空にし confident=false。
-- 1通に複数の会議の連絡があれば、会議ごとに answers に入れる。
-- event_id は「候補イベント」のIDから選ぶ。
-  「本日の五役」「13日の理事会」のように日付・種別・名前で特定する。
-  特定できない会議は入れない。
-- status は 出席 / Web出席 / 欠席 / 委任 のいずれか。
-  オンライン・Web・リモート・音声のみでの参加は Web出席。「参加が難しい」「行けない」は 欠席。
-  「欠席になりそう」「今のところ出席」のような見込みも、いちばん近い status にする
-  （本人が確認してから登録する）。
-- late_leave は 遅刻 / 早退 / 遅刻早退 / null（出席・Web出席のときだけ）。
-- note は理由や条件の短いメモ（30字以内）。なければ null。
-  例「出張のため」「音声のみの可能性あり」「シフト次第で再連絡」
-- 読み取りに迷う場合は confident=false。
+- event_id は「候補イベント」のIDから選ぶ。どれか判断できなければ null。
+- status は 出席 / Web出席 / 欠席 / 委任 のいずれか。判断できなければ null。
+- 推測が曖昧な場合や、出欠回答の意図が読み取れない場合は confident=false にする。
 
 出力JSON:
-- answers: [{{"event_id": ID, "status": 出欠, "late_leave": 遅刻等/null, "note": メモ/null}}]
+- event_id: 対象イベントのID(または null)
+- status: 出欠(または null)
 - confident: 明確に読み取れたか(true/false)
 
 # 候補イベント
 {events}
 
-# 会員の連絡
+# 会員のメッセージ
 {text}
 
 # 出力(JSONのみ)
@@ -547,15 +536,9 @@ def digest_survey(texts: list[str]) -> SurveyDigestOutcome | None:
 # --------------------------------------------------------------------------- #
 # 自然文からの出欠意図解釈（F4-7）
 # --------------------------------------------------------------------------- #
-class AttendanceAnswer(BaseModel):
-    event_id: str
-    status: str  # 出席 | Web出席 | 欠席 | 委任
-    late_leave: str | None = None  # 遅刻 | 早退 | 遅刻早退
-    note: str | None = None
-
-
 class AttendanceIntent(BaseModel):
-    answers: list[AttendanceAnswer] = []
+    event_id: str | None = None
+    status: str | None = None  # 出席 | Web出席 | 欠席 | 委任
     confident: bool = False
 
 
@@ -565,36 +548,31 @@ class IntentOutcome(BaseModel):
 
 
 def generate_attendance_intent(
-    text: str, events: str, today: str, *, model: str, project: str, location: str
+    text: str, events: str, *, model: str, project: str, location: str
 ) -> Generation:
     """出欠意図の解釈（テストでモックする境界）。"""
-    prompt = _INTENT_PROMPT.format(text=text, events=events, today=today)
+    prompt = _INTENT_PROMPT.format(text=text, events=events)
     return _call_gemini(
         prompt, model=model, project=project, location=location,
         thinking_budget=thinking_budget_for("attendance_intent"),
     )
 
 
-def parse_attendance_intent(text: str, events: str, today: str = "") -> IntentOutcome | None:
-    """自然文から「どの会議に・どの出欠で」連絡しているかを推定する。失敗時は None。"""
+def parse_attendance_intent(text: str, events: str) -> IntentOutcome | None:
+    """自然文から「どのイベントを・どの出欠で」回答したいかを推定する。失敗時は None。"""
     if not text or not text.strip() or not events.strip():
         return None
     model, project, location = _target("attendance_intent")
     try:
         gen = generate_attendance_intent(
-            text, events, today, model=model, project=project, location=location
+            text, events, model=model, project=project, location=location
         )
         data = json.loads(gen.text)
-        answers = [
-            AttendanceAnswer(
-                event_id=str(a["event_id"]), status=str(a["status"]),
-                late_leave=(str(a["late_leave"]) if a.get("late_leave") else None),
-                note=(str(a["note"]) if a.get("note") else None),
-            )
-            for a in (data.get("answers") or [])
-            if isinstance(a, dict) and a.get("event_id") and a.get("status")
-        ]
-        intent = AttendanceIntent(answers=answers, confident=bool(data.get("confident", False)))
+        intent = AttendanceIntent(
+            event_id=(str(data["event_id"]) if data.get("event_id") else None),
+            status=(str(data["status"]) if data.get("status") else None),
+            confident=bool(data.get("confident", False)),
+        )
     except Exception:  # noqa: BLE001 - LLM未設定/失敗でも本処理は止めない
         logger.exception("出欠意図の解釈に失敗しました")
         return None

@@ -109,13 +109,8 @@ def repo(monkeypatch):
     r.upsert_event(Event(event_id="ev_nov", title="11月例会", type=EventType.例会,
                          datetime_start=NOW + timedelta(days=20), status=EventStatus.open))
     # 書き込みに至る処理（AI の解釈・ドライブ）は呼ばれてもいけない
-    for name in ("generate_calendar_intent", "generate_doc_edit"):
+    for name in ("generate_calendar_intent", "generate_attendance_intent", "generate_doc_edit"):
         monkeypatch.setattr(llm, name, lambda *a, _n=name, **k: pytest.fail(f"{_n} を呼んだ"))
-    # 出欠の連絡は読み取ってよい（確認を返すだけ。登録は本人が押したとき）。
-    # 読み取れた場合でも書き込まないことを確かめるため、いつも「欠席」と読み取らせる
-    monkeypatch.setattr(llm, "generate_attendance_intent", lambda *a, **k: llm.Generation(
-        text=json.dumps({"answers": [{"event_id": "ev_nov", "status": "欠席"}],
-                         "confident": True}, ensure_ascii=False)))
     monkeypatch.setattr(committee_docs, "_token", lambda: pytest.fail("ドライブに触れた"))
     monkeypatch.setattr(lom_drive, "copy", lambda *a, **k: pytest.fail("文書を作った"))
     # 質問への回答は「根拠なし」にして、自動の取次ぎが起きないことも確かめる
@@ -149,16 +144,40 @@ def test_write_like_text_returns_entry_button(repo, role, text, button):
     assert messages[0].quick_reply.items[0].action.data == f"menu|{button}"
 
 
-def test_attendance_free_text_asks_before_registering(repo):
-    # 出欠の連絡は読み取って確認を返す。押すまで登録しない（docs/nl-assistant-design.md §7）
-    from app.attendance_intent import handle_confirm_postback
+@pytest.mark.parametrize("text", [
+    "来週の例会は欠席で",
+    "欠席",
+    "本日の五役ですが\n欠席になりそうです",
+    "やっぱり、参加難しいです",
+    "13日の理事会は出張のため欠席させて下さい",
+    "17日は少し遅れて参加します",
+])
+def test_attendance_contact_guides_to_events_screen(repo, monkeypatch, text):
+    """出欠の連絡は AI で読み取らず、LIFF の［予定と出欠］の画面への案内だけを返す。"""
+    monkeypatch.setenv("LIFF_ID", "2000000000-abcdEFGH")
+    monkeypatch.setenv("LINE_LOGIN_CHANNEL_ID", "2000000000")
+    monkeypatch.setattr(llm, "generate_answer", lambda *a, **k: pytest.fail("AI に回答させない"))
+    [msg] = handle_member_text(repo, MEMBERS["会員"], text, now=NOW)
+    assert "出欠は変わりません" in msg.text
+    [item] = msg.quick_reply.items
+    assert (item.action.label, item.action.uri) == (
+        "予定と出欠", "https://liff.line.me/2000000000-abcdEFGH?view=events")
 
-    messages = handle_member_text(repo, MEMBERS["会員"], "11月例会は仕事のため欠席でお願いします",
+
+def test_attendance_contact_in_group_names_the_sender(repo):
+    # LIFF が未設定なら、トークに予定と出欠を返すボタン
+    [msg] = handle_member_text(repo, MEMBERS["会員"], "欠席します", now=NOW, in_group=True)
+    assert msg.text.startswith(f"{MEMBERS['会員'].name}さん、")
+    assert msg.quick_reply.items[0].action.data == "menu|予定と出欠"
+
+
+def test_attendance_question_is_answered_with_button(repo):
+    # 質問の文は出欠の連絡として扱わず、答えたうえで［予定と出欠］を添える
+    messages = handle_member_text(repo, MEMBERS["会員"], "11月例会の欠席者は何人ですか？",
                                   now=NOW)
-    item = messages[0].quick_reply.items[0]
-    assert item.action.label == "この内容で登録" and repo.writes == []
-    handle_confirm_postback(repo, MEMBERS["会員"], item.action.data, now=NOW)
-    assert repo.writes == ["upsert_attendance"]
+    assert "確認できませんでした" in messages[0].text
+    labels = [i.action.label for i in messages[-1].quick_reply.items]
+    assert "予定と出欠" in labels and "意見箱に送る" in labels
 
 
 def test_non_board_write_like_text_is_just_a_question(repo):
