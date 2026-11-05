@@ -30,9 +30,11 @@ from .models import (
     LineGroup,
     LinkRequest,
     LinkState,
+    MeetingDispatch,
     Member,
     MemberStatus,
     NoticeAction,
+    NoticeTemplate,
     PendingCalendarOp,
     PendingProposalCreate,
     PollResponse,
@@ -168,6 +170,12 @@ class Repository(Protocol):
     def save_feedback_digest(self, digest: FeedbackDigest) -> None: ...
     def get_feedback_digest(self) -> FeedbackDigest | None: ...
 
+    # --- 通知テンプレート・会議の配信物 ---
+    def save_notice_template(self, template: NoticeTemplate) -> None: ...
+    def list_notice_templates(self) -> list[NoticeTemplate]: ...
+    def save_meeting_dispatch(self, dispatch: MeetingDispatch) -> None: ...
+    def get_meeting_dispatch(self, event_id: str) -> MeetingDispatch | None: ...
+
 
 class InMemoryRepository:
     """テスト・ローカル用のインメモリ実装。"""
@@ -186,6 +194,8 @@ class InMemoryRepository:
         self._doc_sessions: dict[str, DocSession] = {}
         self._feedback: dict[str, Feedback] = {}
         self._feedback_digest: FeedbackDigest | None = None
+        self._notice_templates: dict[str, NoticeTemplate] = {}
+        self._dispatches: dict[str, MeetingDispatch] = {}
         self._doc_turns: dict[str, list[DocTurn]] = {}
         self._doc_edits: dict[tuple[str, str], DocEdit] = {}
         self._proposal_creates: dict[str, PendingProposalCreate] = {}
@@ -546,6 +556,20 @@ class InMemoryRepository:
 
     def get_feedback_digest(self) -> FeedbackDigest | None:
         return self._feedback_digest.model_copy(deep=True) if self._feedback_digest else None
+
+    # --- 通知テンプレート・会議の配信物 ---
+    def save_notice_template(self, template: NoticeTemplate) -> None:
+        self._notice_templates[template.template_id] = template.model_copy(deep=True)
+
+    def list_notice_templates(self) -> list[NoticeTemplate]:
+        return [t.model_copy(deep=True) for t in self._notice_templates.values()]
+
+    def save_meeting_dispatch(self, dispatch: MeetingDispatch) -> None:
+        self._dispatches[dispatch.event_id] = dispatch.model_copy(deep=True)
+
+    def get_meeting_dispatch(self, event_id: str) -> MeetingDispatch | None:
+        item = self._dispatches.get(event_id)
+        return item.model_copy(deep=True) if item else None
 
 
 def utcnow() -> datetime:

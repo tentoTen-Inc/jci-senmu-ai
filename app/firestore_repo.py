@@ -29,9 +29,11 @@ from .models import (
     LineGroup,
     LinkRequest,
     LinkState,
+    MeetingDispatch,
     Member,
     MemberStatus,
     NoticeAction,
+    NoticeTemplate,
     PendingCalendarOp,
     PendingProposalCreate,
     PollResponse,
@@ -72,6 +74,8 @@ COL_LINK_REQUESTS = "lineLinkRequests"
 COL_SCHEDULED_POSTS = "scheduledPosts"
 COL_FEEDBACK = "feedbackBox"  # 意見箱（docs/feedback-box-design.md）
 FEEDBACK_DIGEST_DOC = "feedbackDigest"  # settings コレクション内の傾向のまとめ
+COL_NOTICE_TEMPLATES = "noticeTemplates"  # 通知テンプレート（docs/meeting-notice-design.md）
+COL_DISPATCHES = "meetingDispatches"  # 会議の配信物
 COL_LINE_EVENT_CLAIMS = "lineEventClaims"  # TTL（expire_at）で自動削除
 LINE_EVENT_CLAIM_TTL = timedelta(days=7)  # LINE の再送・Pub/Sub の保持（7日）より長く
 SETTINGS_DOC = "global"
@@ -510,3 +514,22 @@ class FirestoreRepository:
     def get_feedback_digest(self) -> FeedbackDigest | None:
         snap = self._db.collection(COL_SETTINGS).document(FEEDBACK_DIGEST_DOC).get()
         return FeedbackDigest.model_validate(snap.to_dict()) if snap.exists else None
+
+    # --- 通知テンプレート・会議の配信物 ---
+    def save_notice_template(self, template: NoticeTemplate) -> None:
+        self._db.collection(COL_NOTICE_TEMPLATES).document(template.template_id).set(
+            template.model_dump(mode="json")
+        )
+
+    def list_notice_templates(self) -> list[NoticeTemplate]:
+        return [NoticeTemplate.model_validate(d.to_dict())
+                for d in self._db.collection(COL_NOTICE_TEMPLATES).stream()]
+
+    def save_meeting_dispatch(self, dispatch: MeetingDispatch) -> None:
+        self._db.collection(COL_DISPATCHES).document(dispatch.event_id).set(
+            dispatch.model_dump(mode="json")
+        )
+
+    def get_meeting_dispatch(self, event_id: str) -> MeetingDispatch | None:
+        snap = self._db.collection(COL_DISPATCHES).document(event_id).get()
+        return MeetingDispatch.model_validate(snap.to_dict()) if snap.exists else None

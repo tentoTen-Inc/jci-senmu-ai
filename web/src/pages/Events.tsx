@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "../api/client";
+import DispatchPanel from "../components/DispatchPanel";
 import {
   Badge,
   Button,
@@ -883,6 +884,8 @@ function DetailDrawer({
                     </div>
                   )}
                 </Panel>
+
+                {event.status !== "cancelled" && <DispatchPanel eventId={event.event_id} />}
 
                 <Panel
                   title="会員ごとの回答"
