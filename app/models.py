@@ -959,3 +959,49 @@ class FeedbackDigest(BaseModel):
     count: int = 0  # まとめた意見の件数
     model: str | None = None
     generated_at: datetime | None = None
+
+
+# --------------------------------------------------------------------------- #
+# 通知テンプレートと会議の配信物（docs/meeting-notice-design.md）
+# --------------------------------------------------------------------------- #
+class NoticeTemplate(BaseModel):
+    """LINE・メールの送信文のテンプレート（差し込み項目つき。§4）。"""
+
+    template_id: str
+    name: str
+    channel: str = "line"  # line | email
+    #: agenda（アジェンダ配信）| meeting_notice（開催案内）| correction（修正の再案内）
+    purpose: str = "agenda"
+    event_types: list[str] = Field(default_factory=list)  # 空なら全部の会議で使える
+    subject: str = ""  # email のみ
+    body: str = ""
+    mention: str = "none"  # line のみ。none | all（全員へのメンション）
+    is_default: bool = False  # その purpose・channel で最初に選ばれる
+    builtin: bool = False  # リポジトリの既定のテンプレート（直すと台帳に保存される）
+    archived: bool = False  # 使わなくなったもの（消さずに隠す）
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+
+
+class LineDispatch(BaseModel):
+    """会議の LINE 投稿（準備した文面と送った記録）。"""
+
+    template_id: str | None = None
+    text: str | None = None  # 送った本文（差し込み後）
+    group_id: str | None = None
+    group_name: str | None = None
+    recipients: int = 0  # 個別に送ったときの人数
+    sent_at: datetime | None = None
+    sent_by: str | None = None
+
+
+class MeetingDispatch(BaseModel):
+    """会議ごとの配信物（§8）。段階 A は LINE と、手で入れるアジェンダ・意見書の URL。"""
+
+    event_id: str
+    agenda_url: str | None = None
+    opinion_url: str | None = None
+    line: LineDispatch = Field(default_factory=LineDispatch)
+    history: list[LineDispatch] = Field(default_factory=list)  # 送った LINE（新しいものが最後）
+    updated_at: datetime | None = None
+    updated_by: str | None = None

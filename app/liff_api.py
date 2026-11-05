@@ -417,29 +417,7 @@ POLL_TARGETS = {
 }
 
 
-def _norm(name: str) -> str:
-    return re.sub(r"[\s　]", "", name)
-
-
-def _preset_group(repo: Repository, key: str):
-    """対象者の既定の案内先グループ（設定の line_groups）。無ければ None。
-
-    管理画面ではボットが入っているグループから選ぶのでグループ ID が入る。名前が入っていたら
-    （以前の設定）名前で探す。
-    """
-    value = repo.get_settings().line_groups.get(key)
-    if not value:
-        return None
-    by_id = next((g for g in sp.active_groups(repo) if g.group_id == value), None)
-    return by_id or _find_group(repo, value)
-
-
-def _find_group(repo: Repository, name: str):
-    """名前でグループを探す（完全一致 → 空白を無視して一致 → 含む。抜けたグループは除く）。"""
-    groups = sp.active_groups(repo)
-    return (next((g for g in groups if g.group_name == name), None)
-            or next((g for g in groups if _norm(g.group_name) == _norm(name)), None)
-            or next((g for g in groups if _norm(name) in _norm(g.group_name)), None))
+_preset_group = sp.preset_group
 
 
 def _target_scope(repo: Repository, target: str, committee: str | None = None) -> TargetScope:

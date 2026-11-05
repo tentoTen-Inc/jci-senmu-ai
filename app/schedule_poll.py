@@ -173,6 +173,27 @@ def active_groups(repo: Repository) -> list[LineGroup]:
             and (not g.left_at or (g.joined_at and g.joined_at > g.left_at))]
 
 
+def preset_group(repo: Repository, key: str) -> LineGroup | None:
+    """対象者の既定の案内先グループ（設定の line_groups の goyaku / riji / all）。無ければ None。
+
+    管理画面ではボットが入っているグループから選ぶのでグループ ID が入る。名前が入っていたら
+    （以前の設定）名前で探す。
+    """
+    value = repo.get_settings().line_groups.get(key)
+    if not value:
+        return None
+    by_id = next((g for g in active_groups(repo) if g.group_id == value), None)
+    return by_id or find_group(repo, value)
+
+
+def find_group(repo: Repository, name: str) -> LineGroup | None:
+    """名前でグループを探す（完全一致 → 空白を無視して一致 → 含む。抜けたグループは除く）。"""
+    groups = active_groups(repo)
+    return (next((g for g in groups if g.group_name == name), None)
+            or next((g for g in groups if _norm(g.group_name) == _norm(name)), None)
+            or next((g for g in groups if _norm(name) in _norm(g.group_name)), None))
+
+
 def committee_group(repo: Repository, committee: str) -> LineGroup | None:
     """名前にその委員会名が含まれるグループ（無ければ None＝対象者に個別に送る）。"""
     wanted = _norm(committee)

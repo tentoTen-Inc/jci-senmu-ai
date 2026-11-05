@@ -71,13 +71,18 @@ def _event_id(repo: Repository, p: Proposal) -> str | None:
     return poll.event_id if poll is not None else None
 
 
-def build_package(repo: Repository, event: Event, *, now: datetime) -> str:
-    """イベントに上程される議案の事前共有パッケージ（Markdown）を返す。閉じた議案は含めない。"""
-    proposals = sorted(
+def proposals_for(repo: Repository, event: Event) -> list[Proposal]:
+    """その会議に上程される議案（閉じた議案は除く。議案番号の順）。"""
+    return sorted(
         (p for p in repo.list_proposals()
          if p.status != "closed" and _event_id(repo, p) == event.event_id),
         key=lambda p: (p.number or "", p.proposal_id),
     )
+
+
+def build_package(repo: Repository, event: Event, *, now: datetime) -> str:
+    """イベントに上程される議案の事前共有パッケージ（Markdown）を返す。"""
+    proposals = proposals_for(repo, event)
     names = {m.member_id: m.name for m in repo.list_members()}
 
     lines = [

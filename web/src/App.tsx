@@ -20,6 +20,7 @@ const RECORDS: NavItem[] = [
   { to: "/line-groups", label: "LINE のやり取り" },
   { to: "/ai-answers", label: "AI の回答" },
   { to: "/agent", label: "送信の記録" },
+  { to: "/notice-templates", label: "通知テンプレート" },
   { to: "/settings", label: "設定" },
 ];
 

@@ -83,6 +83,7 @@ from .link_api import router as link_router
 from .logging_setup import configure_logging
 from .member_menu import build_menu, handle_member_text
 from .notice_actions import ACTION_NOTICE_DONE, handle_done_postback
+from .notice_templates_api import router as notice_templates_router
 from .notices_api import router as notices_router
 from .polls_api import public_router as liff_router
 from .polls_api import router as polls_router
@@ -169,6 +170,7 @@ app.include_router(surveys_router, prefix="/admin")
 app.include_router(surveys_router, prefix="/api")
 app.include_router(lake_router, prefix="/api")  # LINEグループ（データレイク）
 app.include_router(polls_router, prefix="/api")  # 日程調整（管理）
+app.include_router(notice_templates_router, prefix="/api")  # 通知テンプレート・会議の配信物
 app.include_router(feedback_router, prefix="/api")  # 意見箱（管理）
 app.include_router(liff_router)  # 日程調整の LIFF 画面（公開・LINE ログインで本人確認）
 app.include_router(liff_menu_router)  # メニューの LIFF 画面（予定と出欠など。公開・IDトークン）
