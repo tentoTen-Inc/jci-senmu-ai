@@ -608,6 +608,7 @@ class MemberUpdate(BaseModel):
     member_type: MemberType | None = None
     status: MemberStatus | None = None
     contact: Contact | None = None
+    nicknames: list[str] | None = None  # 会議で呼ばれる名前（議事録の話者の判定）
 
 
 @router.post("/members/new")

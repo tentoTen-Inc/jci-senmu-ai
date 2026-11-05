@@ -57,6 +57,7 @@ from . import (
     line_push,
     line_worker,
     lom,
+    minutes,
     proposal_format,
     proposal_submit,
     proposal_sync,
@@ -82,6 +83,7 @@ from .link_api import public_router as liff_link_router
 from .link_api import router as link_router
 from .logging_setup import configure_logging
 from .member_menu import build_menu, handle_member_text
+from .minutes_api import router as minutes_router
 from .notice_actions import ACTION_NOTICE_DONE, handle_done_postback
 from .notice_templates_api import router as notice_templates_router
 from .notices_api import router as notices_router
@@ -172,6 +174,7 @@ app.include_router(lake_router, prefix="/api")  # LINEグループ（データ�
 app.include_router(polls_router, prefix="/api")  # 日程調整（管理）
 app.include_router(notice_templates_router, prefix="/api")  # 通知テンプレート・会議の配信物
 app.include_router(feedback_router, prefix="/api")  # 意見箱（管理）
+app.include_router(minutes_router, prefix="/api")  # 会議の議事録（管理）
 app.include_router(liff_router)  # 日程調整の LIFF 画面（公開・LINE ログインで本人確認）
 app.include_router(liff_menu_router)  # メニューの LIFF 画面（予定と出欠など。公開・IDトークン）
 app.include_router(link_router, prefix="/api")  # LINE 連携の申請・予約投稿（管理）
@@ -647,6 +650,28 @@ async def pubsub_line_worker(request: Request):
         logger.exception("ワーカー処理に失敗（再送待ち）: id=%s", env.get("id"))
         return Response(status_code=500)
     logger.info("lake worker: id=%s result=%s", env.get("id"), result)
+    return Response(status_code=204)
+
+
+@app.post("/pubsub/minutes")
+async def pubsub_minutes(request: Request):
+    """議事録の作業を1段進める（Pub/Sub Push `minutes-jobs`。docs/meeting-minutes-design.md §5.8）。
+
+    認証は /pubsub/line-worker と同じ OIDC。失敗のやり直しは作業の記録（attempts）で行うので、
+    ここでは再送させない（同じ段を二重に進めない）。
+    """
+    if not minutes.is_configured():
+        return Response(status_code=503)
+    if not line_worker.verify_push(request.headers.get("Authorization")):
+        return Response(status_code=401)
+    try:
+        env = line_worker.decode_push(await request.json())
+        payload = env["payload"]
+    except Exception:  # noqa: BLE001 - 壊れたメッセージは再送しても直らない
+        logger.exception("議事録の作業の知らせを解釈できません（破棄）")
+        return Response(status_code=204)
+    result = await run_in_threadpool(minutes.handle, get_repo(), payload, datetime.now())
+    logger.info("minutes worker: %s result=%s", payload.get("event_id"), result)
     return Response(status_code=204)
 
 
