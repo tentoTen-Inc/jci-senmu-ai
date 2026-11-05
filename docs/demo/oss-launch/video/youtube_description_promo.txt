@@ -1,0 +1,13 @@
+地方で頑張る、全ての専務へ。
+LINE で動く青年会議所（JC）の専務のアシスタント「専務AI」を、オープンソース（MIT ライセンス）として無料で公開しました。
+
+予定と出欠・日程調整・AI に聞く・議案書づくりと議案のチェック・段階の管理まで、専務の繰り返しの仕事を AI が下書きし、人が決めます。
+
+▼ GitHub（ソースコード・セットアップ手順）
+https://github.com/tentoTen-Inc/jci-senmu-ai
+
+▼ ご意見・ご要望（GitHub のアカウントは要りません）
+https://docs.google.com/forms/d/e/1FAIpQLSeNLtWm7ROaQBxM1acLK0tuvkFAP1HMK8vWrHvWwsnBk7r_HQ/viewform
+
+※ 画面はすべて、架空の LOM「サンプル青年会議所」と架空の会員のデモ環境で撮影しています。
+※ 専務AI は、日本青年会議所（日本JC）・国際青年会議所（JCI）の公式製品ではありません。
