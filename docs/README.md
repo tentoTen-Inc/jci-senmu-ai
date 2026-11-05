@@ -26,6 +26,7 @@
 | [line-link-design.md](line-link-design.md) | LINE 連携の申請と承認、予約投稿 | `line_link.py`・`link_api.py` |
 | [liff-menu-design.md](liff-menu-design.md) | 立場ごとのリッチメニューと LIFF 画面 | `rich_menu.py`・`liff_api.py`・`static/` |
 | [proposal-ledger-design.md](proposal-ledger-design.md) | 議案台帳と議案書の同期 | `proposal_*.py`・`meeting_package.py` |
+| [meeting-notice-design.md](meeting-notice-design.md) | 会議の案内・アジェンダ配信と通知テンプレート（検討） | `meeting_package.py`・`lom_drive.py`・`delivery.py` |
 | [committee-docs-edit-design.md](committee-docs-edit-design.md) | 委員会資料を LINE から編集 | `committee_docs.py`・`doc_edit_intent.py` |
 | [doc-session-design.md](doc-session-design.md) | チャットは検索のみ、書き込みはボタンから | `doc_session.py`・`member_menu.py` |
 | [external-notice-design.md](external-notice-design.md) | 対外連絡メールの取込と伝達 | `gmail.py`・`gmail_import.py`・`notice_actions.py` |
