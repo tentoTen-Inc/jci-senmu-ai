@@ -476,7 +476,9 @@ def _step_transcribe(repo: Repository, minutes: MeetingMinutes, event: Event,
     data, usage = generate("minutes_transcribe",
                            [_video_part(minutes.gcs_uri, start, end, SPARSE_FPS),
                             {"text": prompt}],
-                           resolution="MEDIA_RESOLUTION_LOW", thinking_budget=128)
+                           resolution="MEDIA_RESOLUTION_LOW", thinking_budget=128,
+                           # 1区切りは通常 1〜2 分。返事が止まったときは早めに打ち切ってやり直す
+                           timeout=300)
     record_inference(repo, kind="minutes_transcribe", usage=usage, now=now,
                      target=event.event_id)
     allowed = _member_ids(repo, event)
@@ -532,8 +534,9 @@ def _step_verify(repo: Repository, minutes: MeetingMinutes, event: Event, now: d
                          f"   前後: {u.context}")
     prompt = _VERIFY_PROMPT.format(materials=materials(repo, event),
                                    questions="\n".join(questions))
+    # HIGH は静止画1枚のときだけ使える（動画では 400 になる）ので、動画で使える中で細かい MEDIUM
     data, usage = generate("minutes_verify", [*parts, {"text": prompt}],
-                           resolution="MEDIA_RESOLUTION_HIGH", thinking_budget=1024)
+                           resolution="MEDIA_RESOLUTION_MEDIUM", thinking_budget=1024)
     record_inference(repo, kind="minutes_verify", usage=usage, now=now, target=event.event_id)
     allowed = _member_ids(repo, event)
     answers = {a.get("index"): a for a in data.get("answers") or [] if isinstance(a, dict)}
