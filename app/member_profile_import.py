@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
-from .models import Contact, Member, MemberProfile
+from .models import Contact, Member, MemberProfile, MemberType
 
 # NFKC で正規化されないダッシュ類（電話・郵便番号で混ざりやすい）を ASCII のハイフンへ
 _DASH_TABLE = {ord(c): "-" for c in "‐‑‒–—―−ー"}
@@ -118,7 +118,8 @@ class Change:
 class Plan:
     changes: list[Change] = field(default_factory=list)
     unmatched: list[RosterRow] = field(default_factory=list)  # 会員に当てられなかった名簿の人
-    not_in_roster: list[Member] = field(default_factory=list)  # 名簿にいない在籍の会員
+    #: 名簿にいない在籍の正会員（賛助会員・外部監事・事務局は日本JCの名簿に載らないので出さない）
+    not_in_roster: list[Member] = field(default_factory=list)
 
 
 def _match(row: RosterRow, members: list[Member]) -> Member | None:
@@ -177,5 +178,6 @@ def plan(members: list[Member], rows: list[RosterRow], *, as_of: str | None = No
         if update:
             change.member = member.model_copy(update=update)
         result.changes.append(change)
-    result.not_in_roster = [m for m in members if m.is_current and m.member_id not in seen]
+    result.not_in_roster = [m for m in members if m.is_current and m.member_id not in seen
+                            and m.member_type == MemberType.regular]
     return result
