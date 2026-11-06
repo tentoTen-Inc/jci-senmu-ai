@@ -462,9 +462,29 @@ def _step_copy(repo: Repository, minutes: MeetingMinutes, event: Event, now: dat
     minutes.chunk = 0
 
 
-def _shift(value: str | None, offset: int) -> str | None:
-    sec = to_sec(value)
-    return hms(sec + offset) if sec is not None else value
+def _chunk_offset(values: list[int | None], start: int, end: int) -> int:
+    """AI が区切りの頭からの時刻で返したら、その区切りの始めの秒（録画の頭からに直す差）。"""
+    lo, hi = start - 60, end + 60
+    known = [v for v in values if v is not None]
+    absolute = sum(1 for v in known if lo <= v <= hi)
+    relative = sum(1 for v in known if lo <= v + start <= hi)
+    return start if start > 0 and relative > absolute else 0
+
+
+def _chunk_times(values: list[int | None], start: int, end: int, offset: int) -> list[int]:
+    """区切りの中の時刻（秒）を、録画の頭からの秒に直す。
+
+    AI は時刻の桁を取り違えることがある（本番で 00:10:35 を 01:00:35 と書いた）。
+    区切りの範囲に入らない時刻は、直前の正しい時刻で置き換える（発言の並びは書き起こしの順）。
+    """
+    out, prev = [], start
+    for v in values:
+        t = v + offset if v is not None else None
+        if t is None or not start - 60 <= t <= end + 60:
+            t = prev
+        out.append(t)
+        prev = t
+    return out
 
 
 def _step_transcribe(repo: Repository, minutes: MeetingMinutes, event: Event,
@@ -483,25 +503,34 @@ def _step_transcribe(repo: Repository, minutes: MeetingMinutes, event: Event,
                      target=event.event_id)
     allowed = _member_ids(repo, event)
     raw = [s for s in data.get("segments") or [] if isinstance(s, dict) and s.get("text")]
-    # 区切りの頭からの時刻で返ってきたら、録画の頭からの時刻に直す
-    first = min((to_sec(s.get("start")) or 0 for s in raw), default=0)
-    offset = start if start > 0 and first < start - 60 else 0
-    last = to_sec(minutes.segments[-1].start) if minutes.segments else None
-    keep_from = last if last is not None else -1
-    for s in raw:
+    asks = [u for u in data.get("unclear") or [] if isinstance(u, dict) and u.get("at")]
+    offset = _chunk_offset([to_sec(s.get("start")) for s in raw], start, end)
+    starts = _chunk_times([to_sec(s.get("start")) for s in raw], start, end, offset)
+    ats = _chunk_times([to_sec(u.get("at")) for u in asks], start, end, offset)
+    # 前後の区切りと重ねた部分は、境目（重なりの真ん中）で分けて二重に入れない
+    own_from = start + OVERLAP_SEC if start > 0 else 0
+    own_to = end - OVERLAP_SEC if end < (minutes.duration_sec or end) else end + 61
+
+    def own(sec: int) -> bool:
+        return own_from <= sec < own_to
+
+    for s, sec in zip(raw, starts, strict=True):
+        if not own(sec):
+            continue
         speaker = _clean_member(s.get("speaker"), allowed)
-        seg = MinutesSegment(
-            start=_shift(s.get("start"), offset) or hms(start),
-            end=_shift(s.get("end"), offset), text=str(s.get("text", "")).strip(),
+        stop = to_sec(s.get("end"))
+        stop = stop + offset if stop is not None else None
+        if stop is not None and not sec <= stop <= end + 60:
+            stop = None  # 終わりの時刻を取り違えていたら空にする
+        minutes.segments.append(MinutesSegment(
+            start=hms(sec), end=hms(stop) if stop is not None else None,
+            text=str(s.get("text", "")).strip(),
             speaker=speaker, speaker_by=s.get("speaker_by") if speaker else None,
-            proposal=s.get("proposal") or None, screen=s.get("screen") or None)
-        # 前の区切りと重ねた部分は、前の区切りのものを残す
-        if (to_sec(seg.start) or 0) > keep_from:
-            minutes.segments.append(seg)
-    for u in data.get("unclear") or []:
-        if isinstance(u, dict) and u.get("at"):
+            proposal=s.get("proposal") or None, screen=s.get("screen") or None))
+    for u, sec in zip(asks, ats, strict=True):
+        if own(sec):
             minutes.unclear.append(MinutesUnclear(
-                unclear_id=uuid.uuid4().hex[:10], at=_shift(u.get("at"), offset) or hms(start),
+                unclear_id=uuid.uuid4().hex[:10], at=hms(sec),
                 kind=u.get("kind") or "word", question=str(u.get("question", "")),
                 context=str(u.get("context", ""))))
     minutes.chunk += 1
