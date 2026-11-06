@@ -7,12 +7,14 @@
 #
 # 前提: setup_datalake.sh 済み（Push 用 SA・PUBSUB_PUSH_AUDIENCE）、かつ /pubsub/minutes を
 #       含むコードがデプロイ済み（main へのマージ後に実行する）。
-# 使い方: ./scripts/setup_minutes.sh   （direnv 有効な状態で）
+# 使い方: GCP_PROJECT_ID=<プロジェクト> direnv exec . ./scripts/setup_minutes.sh
 set -euo pipefail
 
 PROJECT="${GCP_PROJECT_ID:?GCP_PROJECT_ID を設定してください}"
 REGION="${GCP_REGION:-asia-northeast1}"
 SERVICE="${AGENT_SERVICE:-jci-sed-agent}"
+# 管理画面（［議事録を作る］で作業を始める）も設定を読む
+ADMIN="${ADMIN_SERVICE:-jci-sed-admin}"
 BUCKET="${MINUTES_BUCKET_NAME:-${PROJECT}-minutes}"
 TOPIC="${MINUTES_TOPIC_NAME:-minutes-jobs}"
 SUB="${TOPIC}-push"
@@ -90,9 +92,14 @@ echo ">> ${SERVICE}: 設定を追加（既存の環境変数は保持）・待�
 gcloud run services update "${SERVICE}" --region "${REGION}" --project "${PROJECT}" \
   --update-env-vars "MINUTES_BUCKET=${BUCKET},MINUTES_TOPIC=${TOPIC}" \
   --timeout 600 --quiet >/dev/null
+echo ">> ${ADMIN}: 同じ設定を追加（既存の環境変数は保持）"
+gcloud run services update "${ADMIN}" --region "${REGION}" --project "${PROJECT}" \
+  --update-env-vars "MINUTES_BUCKET=${BUCKET},MINUTES_TOPIC=${TOPIC}" \
+  --quiet >/dev/null
 
 cat <<MSG
 
 完了しました。管理画面の予定 → 議事録 →［議事録を作る］で、録画の URL を指定して作れます。
-元に戻す: gcloud run services update ${SERVICE} --region ${REGION} --project ${PROJECT} --remove-env-vars MINUTES_BUCKET,MINUTES_TOPIC
+元に戻す（${SERVICE} と ${ADMIN} の両方で）:
+  gcloud run services update <サービス> --region ${REGION} --project ${PROJECT} --remove-env-vars MINUTES_BUCKET,MINUTES_TOPIC
 MSG
