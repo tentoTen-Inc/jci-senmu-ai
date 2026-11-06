@@ -19,7 +19,7 @@ import {
 type Settings = {
   kill_switch: boolean;
   operation_start: string | null;
-  quiet_hours: { start: string; end: string; tz: string };
+  quiet_hours: { enabled?: boolean; start: string; end: string; tz: string };
   rate_limit: { per_member_per_day: number; global_per_min: number };
   line_groups: Record<string, string>;
 } & NoticeMailValue;
@@ -79,7 +79,7 @@ export default function Settings() {
   const { confirm, toast } = useUi();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [opStart, setOpStart] = useState("");
-  const [quiet, setQuiet] = useState({ start: "", end: "" });
+  const [quiet, setQuiet] = useState({ enabled: true, start: "", end: "" });
   const [rate, setRate] = useState({ per_member_per_day: 0, global_per_min: 0 });
   const [groups, setGroups] = useState<Record<string, string>>({});
   const [botGroups, setBotGroups] = useState<BotGroup[]>([]);
@@ -91,7 +91,7 @@ export default function Settings() {
   const applySettings = (s: Settings) => {
     setSettings(s);
     setOpStart(s.operation_start ?? "");
-    setQuiet({ start: s.quiet_hours.start, end: s.quiet_hours.end });
+    setQuiet({ enabled: s.quiet_hours.enabled ?? true, start: s.quiet_hours.start, end: s.quiet_hours.end });
     setRate({ ...s.rate_limit });
     setGroups({ ...(s.line_groups ?? {}) });
   };
@@ -121,7 +121,8 @@ export default function Settings() {
       setSettings(saved);
       // 保存した欄だけ表示を合わせる
       if ("operation_start" in patch) setOpStart(saved.operation_start ?? "");
-      if ("quiet_hours" in patch) setQuiet({ start: saved.quiet_hours.start, end: saved.quiet_hours.end });
+      if ("quiet_hours" in patch)
+        setQuiet({ enabled: saved.quiet_hours.enabled ?? true, start: saved.quiet_hours.start, end: saved.quiet_hours.end });
       if ("rate_limit" in patch) setRate({ ...saved.rate_limit });
       if ("line_groups" in patch) setGroups({ ...(saved.line_groups ?? {}) });
       toast(done);
@@ -207,7 +208,8 @@ export default function Settings() {
   if (!settings) return <Loading />;
 
   const opDirty = (settings.operation_start ?? "") !== opStart;
-  const quietDirty = quiet.start !== settings.quiet_hours.start || quiet.end !== settings.quiet_hours.end;
+  const quietDirty =
+    quiet.enabled !== (settings.quiet_hours.enabled ?? true) || quiet.start !== settings.quiet_hours.start || quiet.end !== settings.quiet_hours.end;
   const rateDirty =
     rate.per_member_per_day !== settings.rate_limit.per_member_per_day ||
     rate.global_per_min !== settings.rate_limit.global_per_min;
@@ -329,17 +331,23 @@ export default function Settings() {
         <div className="grid gap-5 md:grid-cols-2">
           <div>
             <div className="mb-2 text-sm font-bold">送らない時間帯（{tzLabel(settings.quiet_hours.tz)}）</div>
-            <div className="flex flex-wrap items-end gap-2">
+            <label className="mb-2 flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={quiet.enabled} onChange={(e) => setQuiet({ ...quiet, enabled: e.target.checked })} />
+              夜間などに送らない時間帯を使う
+            </label>
+            <div className={`flex flex-wrap items-end gap-2 ${quiet.enabled ? "" : "opacity-40"}`}>
               <Field label="開始">
-                <input type="time" className="w-32" value={quiet.start} onChange={(e) => setQuiet({ ...quiet, start: e.target.value })} />
+                <input type="time" className="w-32" disabled={!quiet.enabled} value={quiet.start} onChange={(e) => setQuiet({ ...quiet, start: e.target.value })} />
               </Field>
               <span className="pb-2 text-sm text-ink-sub">〜</span>
               <Field label="終了">
-                <input type="time" className="w-32" value={quiet.end} onChange={(e) => setQuiet({ ...quiet, end: e.target.value })} />
+                <input type="time" className="w-32" disabled={!quiet.enabled} value={quiet.end} onChange={(e) => setQuiet({ ...quiet, end: e.target.value })} />
               </Field>
             </div>
             <p className="mt-2 text-xs leading-relaxed text-ink-sub">
-              この時間帯に送る予定のものは、終了の時刻のあとに送ります。
+              {quiet.enabled
+                ? "この時間帯に送る予定のものは、終了の時刻のあとに送ります。"
+                : "時間帯を使わないので、夜間でもすぐに送ります（会員への催促や差し戻しの知らせも含みます）。"}
             </p>
           </div>
           <div>
@@ -380,7 +388,7 @@ export default function Settings() {
             <Button
               variant="ghost"
               onClick={() => {
-                setQuiet({ start: settings.quiet_hours.start, end: settings.quiet_hours.end });
+                setQuiet({ enabled: settings.quiet_hours.enabled ?? true, start: settings.quiet_hours.start, end: settings.quiet_hours.end });
                 setRate({ ...settings.rate_limit });
               }}
             >

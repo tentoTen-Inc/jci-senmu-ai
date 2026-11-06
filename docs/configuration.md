@@ -117,7 +117,7 @@ LOM ごとに変わる名前・URL です。コードには直書きしません
 | 項目 | 説明 |
 |---|---|
 | `kill_switch` | `true` で LINE への自動送信をすべて止める（[runbook.md](runbook.md) §4） |
-| `quiet_hours` | 送らない時間帯（既定 21:00〜8:00） |
+| `quiet_hours` | 送らない時間帯（既定 21:00〜8:00）。`enabled: false` で使わない（夜間も送る LOM 向け。管理画面「設定」のチェックで切り替える） |
 | `rate_limit` | 1 人あたり・全体の送信数の上限 |
 | `operation_start` | 運用開始日（年度の始まり）。これより前の予定は管理画面の一覧に既定で出さず、カレンダーからも取り込まない |
 | `rich_menus` | 立場ごとのリッチメニュー ID（`scripts/setup_rich_menu.py --create` が保存） |

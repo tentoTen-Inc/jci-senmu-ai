@@ -431,6 +431,10 @@ class ReminderPolicy(BaseModel):
 
 
 class QuietHours(BaseModel):
+    """送らない時間帯。LOM によって夜間も送る方針もあるので、使うかどうかを選べる。"""
+
+    #: false なら夜間も送る（時刻は残しておき、また使うときに戻せる）
+    enabled: bool = True
     start: str = "21:00"
     end: str = "08:00"
     tz: str = "Asia/Tokyo"
