@@ -535,7 +535,8 @@ def _step_transcribe(repo: Repository, minutes: MeetingMinutes, event: Event,
                 context=str(u.get("context", ""))))
     minutes.chunk += 1
     if minutes.chunk >= len(ranges):
-        minutes.status = MinutesStatus.verifying
+        minutes.status = (MinutesStatus.verifying if repo.get_settings().minutes.verify_screen
+                          else MinutesStatus.drafting)
 
 
 def _segment_at(minutes: MeetingMinutes, at: str) -> MinutesSegment | None:
@@ -545,7 +546,8 @@ def _segment_at(minutes: MeetingMinutes, at: str) -> MinutesSegment | None:
 
 
 def _step_verify(repo: Repository, minutes: MeetingMinutes, event: Event, now: datetime) -> None:
-    limit = repo.get_settings().minutes.verify_limit
+    setting = repo.get_settings().minutes
+    limit = setting.verify_limit if setting.verify_screen else 0
     done = sum(1 for u in minutes.unclear if u.status != "open")
     todo = [u for u in minutes.unclear if u.status == "open"
             and not u.answer][:max(min(VERIFY_BATCH, limit - done), 0)]

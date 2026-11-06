@@ -18,6 +18,7 @@ from app.models import (
     EventType,
     LineGroup,
     Member,
+    MinutesSetting,
     MinutesStatus,
     QuietHours,
     Settings,
@@ -78,7 +79,9 @@ def repo(monkeypatch):
     r.save_line_group(LineGroup(group_id="Cmachi", group_name="まちづくり委員会",
                                 joined_at=datetime(2026, 10, 1)))
     # 画面からの送信は今の時刻で判定するので、静音時間なしにしておく（静音時間は別のテストで）
-    r.save_settings(Settings(line_groups={"goyaku": "Cgoyaku"}, quiet_hours=NO_QUIET))
+    # 画面で確かめる段も通す（既定はしない。しないときは別のテストで）
+    r.save_settings(Settings(line_groups={"goyaku": "Cgoyaku"}, quiet_hours=NO_QUIET,
+                             minutes=MinutesSetting(verify_screen=True)))
     set_repo(r)
 
     monkeypatch.setenv("MINUTES_BUCKET", "test-minutes")
@@ -212,6 +215,16 @@ def test_pipeline_runs_step_by_step(repo):
     assert "【議事録の案】第2回五役会" in repo.notices[-1]
     kinds = {log.kind for log in repo.list_inference_logs()}
     assert {"minutes_transcribe", "minutes_verify", "minutes_draft"} <= kinds
+
+
+def test_screen_check_is_off_by_default(repo):
+    repo.save_settings(repo.get_settings().model_copy(update={"minutes": MinutesSetting()}))
+    minutes = _ready(repo)
+    assert minutes.status == MinutesStatus.ready
+    # 画面は見ずに、わからない所は人が直す不明点として残す
+    assert not any(c[0] == "minutes_verify" for c in repo.calls)
+    assert [u.status for u in minutes.unclear] == ["open", "open"]
+    assert minutes.segments[1].speaker is None
 
 
 def test_stale_and_duplicate_messages_are_ignored(repo):
