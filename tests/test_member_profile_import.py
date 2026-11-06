@@ -2,7 +2,7 @@
 import pytest
 
 from app.member_profile_import import RosterRow, plan
-from app.models import Contact, Member, MemberProfile, MemberStatus
+from app.models import Contact, Member, MemberProfile, MemberStatus, MemberType
 
 
 def _row(**kw) -> RosterRow:
@@ -55,11 +55,13 @@ def test_matches_by_member_no_then_name_and_reports_the_rest():
                      profile=MemberProfile(member_no="9999-00001"))
     absent = Member(member_id="m2", name="江口 隆之")
     left = Member(member_id="m3", name="杉山 花子", status=MemberStatus.inactive)
-    result = plan([renamed, absent, left],
+    staff = Member(member_id="m4", name="田中 洋子", member_type=MemberType.office)
+    result = plan([renamed, absent, left, staff],
                   [_row(), _row(member_no="9999-00002", name="田村 修")])
     assert result.changes[0].member.member_id == "m1"
     assert [r.name for r in result.unmatched] == ["田村 修"]
-    assert [m.member_id for m in result.not_in_roster] == ["m2"]  # 退会した人は出さない
+    # 退会した人と、名簿に載らない会員区分（事務局など）は出さない
+    assert [m.member_id for m in result.not_in_roster] == ["m2"]
 
 
 def test_unchanged_when_imported_twice():
