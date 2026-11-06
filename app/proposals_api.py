@@ -1,13 +1,14 @@
 """議案ライフサイクルAPI（docs/dashboard-design.md §4.1/§5, F6）。"""
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import folder_docs, proposal_format
+from . import folder_docs, proposal_format, proposal_return
 from .audit import write_audit
 from .deps import get_repo
 from .drive_import import import_drive_folder
@@ -24,6 +25,8 @@ from .models import (
 from .proposal_matrix import build_proposal_matrix
 from .proposal_submit import meeting_label, plan_label
 from .proposal_sync import blank_count
+
+logger = logging.getLogger("jci-agent.proposals_api")
 
 router = APIRouter(tags=["proposals"])
 
@@ -62,7 +65,8 @@ def _out(repo, p: Proposal) -> dict:
     """画面用: 上程先の会議（日程調整中なら「〇〇（日程調整中）」）・空欄の数・提出予定日。"""
     return {**p.model_dump(mode="json"), "meeting_label": meeting_label(repo, p),
             "blank_count": blank_count(p) if p.sections else None,
-            "submit_plan_label": plan_label(p)}
+            "submit_plan_label": plan_label(p),
+            "return_notice": proposal_return.status(p)}
 
 
 @router.get("/proposals")
@@ -256,7 +260,11 @@ def return_proposal(
     payload: ApprovalAction,
     x_goog_authenticated_user_email: str | None = Header(default=None),
 ):
-    """専務理事が議案を差戻し。エントリーへ戻す（委員会が直して［提出する］を押し直す）。"""
+    """専務理事が議案を差戻し。エントリーへ戻す（委員会が直して［提出する］を押し直す）。
+
+    提出した人・委員長（委員会の外の議案は担当者）・担当副理事長に LINE で知らせる
+    （静音時間なら明けた tick で。app/proposal_return.py）。
+    """
     repo = get_repo()
     p = repo.get_proposal(proposal_id)
     if p is None:
@@ -271,7 +279,11 @@ def return_proposal(
         repo, actor=actor, action="proposal.return",
         target=proposal_id, detail=payload.comment,
     )
-    return p
+    try:
+        p = proposal_return.notify(repo, p, now)
+    except Exception:  # noqa: BLE001 - 差し戻しは済んでいる。知らせは次の tick で送り直す
+        logger.exception("差し戻しの知らせに失敗: %s", proposal_id)
+    return _out(repo, p)
 
 
 class StageUpdate(BaseModel):
