@@ -443,6 +443,9 @@ class EmailStyle(BaseModel):
 class MinutesSetting(BaseModel):
     """議事録の設定（docs/meeting-minutes-design.md §9）。"""
 
+    #: 書き起こしの後に、わからない所を録画の画面で確かめるか。費用が書き起こしと同じくらい
+    #: かかるので既定は行わない（わからない所は「不明点」に残し、人が直す）
+    verify_screen: bool = False
     #: 画面で確かめる箇所の上限（1回の会議）。超えたぶんは「不明点」に残す
     verify_limit: int = 40
     #: 用語集（委員会名・行事名・地名など）。台帳の委員会・会議は自動で足す
