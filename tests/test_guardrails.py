@@ -23,6 +23,15 @@ def test_quiet_hours_overnight_window():
     assert is_quiet_hours(datetime(2026, 6, 20, 12, 0), s) is False
 
 
+def test_quiet_hours_can_be_turned_off():
+    # 夜間も送る LOM: 時刻は残したまま、送らない時間帯を使わない
+    s = Settings(quiet_hours=QuietHours(enabled=False, start="21:00", end="08:00"))
+    assert is_quiet_hours(datetime(2026, 6, 20, 23, 0), s) is False
+    assert next_send_time(datetime(2026, 6, 20, 23, 0), s) == datetime(2026, 6, 20, 23, 0)
+    assert decide_send(InMemoryRepository(), "m1", now=datetime(2026, 6, 20, 23, 0),
+                       settings=s).send is True
+
+
 def test_next_send_time_defers_to_morning():
     s = Settings(quiet_hours=QuietHours(start="21:00", end="08:00"))
     # 23時 → 翌朝8時
