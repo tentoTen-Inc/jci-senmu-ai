@@ -136,6 +136,30 @@ class Contact(BaseModel):
     fax: str | None = None
 
 
+class MemberProfile(BaseModel):
+    """日本JCの会員名簿（在籍会員一覧表）の項目。本部への申請などに使う。
+
+    連絡先（携帯・メール・住所・勤務先）は `Contact` に入れ、ここには名簿にしかない項目を置く。
+    取込は `app/member_profile_import.py`。年齢は生年月日から出すので持たない。
+    """
+
+    member_no: str | None = None  # LOM-会員No（例 "0647-00001"）
+    joined_on: str | None = None  # 入会年月日（YYYY-MM-DD）
+    gender: str | None = None  # 性別（名簿の表記: 男 | 女）
+    home_fax: str | None = None
+    work_postal_code: str | None = None
+    work_address: str | None = None
+    company_form: str | None = None  # 企業形態（例 "1:株式会社"）
+    industry_code: str | None = None  # 業種コード（例 "0401"）
+    industry: str | None = None  # 業種（例 "木造建築業"）
+    industry_section: str | None = None  # 業種別部会
+    education: str | None = None  # 最終学歴の区分（例 "大学卒業"）
+    school: str | None = None  # 最終学歴の学校名
+    blood_type: str | None = None  # 血液型（例 "A型"）
+    mail_to: str | None = None  # 送付先（名簿の表記: 自宅 | 事務局 など）
+    as_of: str | None = None  # 名簿の日付（YYYY-MM-DD）
+
+
 class Secondment(BaseModel):
     org: str
     role: str
@@ -167,7 +191,9 @@ class Member(BaseModel):
     lom_id: str = Field(default_factory=_default_lom_id)
     name: str
     kana: str | None = None
-    birthday: str | None = None  # 生年月日（和暦表記をそのまま保持: 例 "H3.11.15"）
+    #: 生年月日。日本JCの名簿からは YYYY-MM-DD。
+    #: 古い名簿（xlsx）からの値は和暦の表記のまま（例 "H3.11.15"）
+    birthday: str | None = None
     member_type: MemberType = MemberType.regular
     status: MemberStatus = MemberStatus.active
     committee: str | None = None  # 主たる所属（既存の画面・CSV との互換用）
@@ -178,6 +204,8 @@ class Member(BaseModel):
     supervised_committees: list[str] = Field(default_factory=list)
     secondments: list[Secondment] = Field(default_factory=list)
     contact: Contact = Field(default_factory=Contact)
+    #: 日本JCの会員名簿の項目（会員番号・入会日・勤務先の住所・業種・学歴など）
+    profile: MemberProfile = Field(default_factory=MemberProfile)
     line_user_id: str | None = None
     linked_at: datetime | None = None
     #: 会議で呼ばれる名前（名前の一部・あだ名）。議事録の話者の判定に使う
