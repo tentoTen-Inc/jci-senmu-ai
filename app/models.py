@@ -867,7 +867,8 @@ class Proposal(BaseModel):
     #: 提出締切を設定・変更した時刻。これより前に過ぎていた締切では未提出の知らせを送らない
     submit_deadline_set_at: datetime | None = None
     submit_plans: list[SubmitPlan] = Field(default_factory=list)  # 提出予定日（新しいものが最後）
-    alerts: list[ProposalAlert] = Field(default_factory=list)  # 担当副理事長への未提出の知らせ
+    #: 担当副理事長への未提出の知らせと、差し戻しの知らせ（key が "returned:" で始まる）
+    alerts: list[ProposalAlert] = Field(default_factory=list)
     # --- 資料フォルダ（storage_uri）から読んだ内容（作業文書を持たない予算書など） ---
     sources: list[ProposalSource] = Field(default_factory=list)
     source_error: str | None = None  # 読めなかった理由

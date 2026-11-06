@@ -369,11 +369,12 @@ def send_overdue_alert(repo: Repository, p: Proposal, now: datetime) -> int:
 
 def alert_status(p: Proposal) -> str:
     """締切の記入状況に添える、担当（副理事長・議案の担当者）への連絡状況。"""
-    if not p.alerts:
+    alerts = [a for a in p.alerts if not a.key.startswith("returned:")]  # 差し戻しの知らせは除く
+    if not alerts:
         return "未連絡"
-    last_key = p.alerts[-1].key
+    last_key = alerts[-1].key
     parts = [f"{a.name}さん{'に送信済み' if a.ok else 'に連絡できず'}"
-             for a in p.alerts if a.key == last_key]
+             for a in alerts if a.key == last_key]
     plan = latest_plan(p)
     if plan is not None:
         parts.append(f"提出予定 {day_label(plan.date)}")
