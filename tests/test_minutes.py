@@ -187,7 +187,7 @@ def test_pipeline_runs_step_by_step(repo):
     assert video["fileData"]["fileUri"].startswith("gs://test-minutes/minutes/ev1/")
     assert transcribe[0][2]["resolution"] == "MEDIA_RESOLUTION_LOW"
     verify = next(c for c in repo.calls if c[0] == "minutes_verify")
-    assert verify[2]["resolution"] == "MEDIA_RESOLUTION_HIGH"
+    assert verify[2]["resolution"] == "MEDIA_RESOLUTION_MEDIUM"
     assert verify[1][0]["videoMetadata"] == {"startOffset": "280s", "endOffset": "320s",
                                              "fps": 1}
     # まとめ: 作った会員IDは消し、内々の話は分ける。一時置き場は消す
