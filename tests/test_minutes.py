@@ -44,10 +44,9 @@ TRANSCRIPTS = [
         {"at": "00:05:00", "kind": "speaker", "question": "話しているのは誰か",
          "context": "80行目"},
         {"at": "00:06:00", "kind": "word", "question": "ハナちゃんは誰か", "context": "呼び名"}]},
-    # 2つ目の区切り（区切りの頭からの時刻で返ってきた → 録画の頭からに直す）。
-    # 頭の 00:00:10（録画の 00:14:40）は重なりの前半なので、1つ目の区切りのものとして入れない
+    # 2つ目の区切り（区切りの頭からの時刻で返ってきた → 録画の頭からに直す）。区切りは重ねない
     {"segments": [
-        {"start": "00:00:10", "speaker": "m1", "text": "重なりの部分"},
+        {"start": "00:00:10", "speaker": "m1", "text": "区切りの頭"},
         {"start": "00:01:00", "speaker": "m2", "text": "次回は理事会で確認します"},
         # 時刻の桁の取り違え（本番で 00:10:35 を 01:00:35 と書いた）→ 直前の時刻に置き換える
         {"start": "01:00:35", "end": "01:00:50", "speaker": "m1", "text": "続けて説明します"}],
@@ -155,17 +154,19 @@ def _ready(repo):
 def test_time_helpers_and_chunks():
     assert mn.to_sec("01:02:03") == 3723 and mn.to_sec("05:00") == 300
     assert mn.hms(3723) == "01:02:03"
-    assert mn.chunks(20 * 60) == [(0, 930), (870, 1200)]
+    assert mn.chunks(20 * 60) == [(0, 900), (900, 1200)]
     assert mn.chunks(0) == [(0, 1)]
 
 
 def test_chunk_times_fix_relative_and_mistyped():
     # 区切りの頭からの時刻 → 録画の頭からに直す
-    assert mn._chunk_offset([10, 60, 300], 870, 1830) == 870
-    assert mn._chunk_offset([880, 930], 870, 1830) == 0
-    # 範囲に入らない時刻（桁の取り違え・空）は直前の正しい時刻にする
-    assert mn._chunk_times([600, 3635, None, 620], 0, 930, 0) == [600, 600, 600, 620]
-    assert mn._chunk_times([7140, 900], 870, 1830, 0) == [870, 900]
+    assert mn._chunk_offset([10, 60, 300], 900, 1800) == 900
+    assert mn._chunk_offset([910, 960], 900, 1800) == 0
+    # 範囲に入らない時刻（桁の取り違え・空）は直前の正しい時刻にする。前の時刻より戻らない
+    assert mn._chunk_times([600, 3635, None, 620], 0, 900, 0) == [600, 600, 600, 620]
+    assert mn._chunk_times([7140, 950, 920], 900, 1800, 0) == [900, 950, 950]
+    # 範囲に入る時刻が半分に満たなければ、区切りの中に順に割り振る（発言は捨てない）
+    assert mn._chunk_times([7140, 7200, None, 950], 900, 1800, 0) == [900, 1125, 1350, 1575]
 
 
 def test_drive_id_from_urls():
@@ -188,11 +189,10 @@ def test_split_at_section_breaks():
 def test_pipeline_runs_step_by_step(repo):
     minutes = _ready(repo)
     assert minutes.status == MinutesStatus.ready
-    # 区切りの頭からの時刻は録画の頭からに直し、重なった部分は境目で分ける。
-    # 取り違えた時刻があっても、後の区切りの発言を捨てない
+    # 区切りの頭からの時刻は録画の頭からに直す。取り違えた時刻があっても発言を捨てない
     assert [s.start for s in minutes.segments] == ["00:00:10", "00:05:00", "00:06:00",
-                                                   "00:15:30", "00:15:30"]
-    assert minutes.segments[4].end is None
+                                                   "00:15:10", "00:16:00", "00:16:00"]
+    assert minutes.segments[5].end is None
     # 出席予定者でない会員IDは話者にしない。画面で確かめた所だけ根拠つきで直す
     seg = minutes.segments[1]
     assert seg.speaker == "m2" and seg.speaker_by == "screen" and "発言中の枠" in seg.evidence
@@ -201,7 +201,7 @@ def test_pipeline_runs_step_by_step(repo):
     # 録画の範囲・画面の枚数・解像度
     transcribe = [c for c in repo.calls if c[0] == "minutes_transcribe"]
     video = transcribe[1][1][0]
-    assert video["videoMetadata"]["startOffset"] == "870s"
+    assert video["videoMetadata"]["startOffset"] == "900s"
     assert video["fileData"]["fileUri"].startswith("gs://test-minutes/minutes/ev1/")
     assert transcribe[0][2]["resolution"] == "MEDIA_RESOLUTION_LOW"
     verify = next(c for c in repo.calls if c[0] == "minutes_verify")

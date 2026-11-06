@@ -43,9 +43,11 @@ from .sed_notice import notify_sed
 
 logger = logging.getLogger("jci-agent.minutes")
 
-#: 一次の読み取りの区切り（秒）と前後の重なり。Cloud Run の1回の処理（最長10分）に収まる長さ
+#: 一次の読み取りの区切り（秒）。Cloud Run の1回の処理（最長10分）に収まる長さ。
+#: 区切りは重ねない。重ねると二重に入らないよう時刻で捨てる必要があり、AI の時刻が不正確なときに
+#: 発言をまとめて捨ててしまった（本番で区切りがまるごと消えた）。境目の発言は両側に半分ずつ入る
 CHUNK_SEC = 15 * 60
-OVERLAP_SEC = 30
+OVERLAP_SEC = 0
 #: 一次の読み取りで画面を見る間隔（秒に何枚）。トークンの大半は音声で、画面のぶんは少ない
 SPARSE_FPS = 1 / 15
 #: 画面での確認で見る前後の秒数と、1回の AI の呼び出しで確かめる数
@@ -472,16 +474,20 @@ def _chunk_offset(values: list[int | None], start: int, end: int) -> int:
 
 
 def _chunk_times(values: list[int | None], start: int, end: int, offset: int) -> list[int]:
-    """区切りの中の時刻（秒）を、録画の頭からの秒に直す。
+    """区切りの中の時刻（秒）を、録画の頭からの秒に直す。発言は捨てず、並びは書き起こしの順。
 
     AI は時刻の桁を取り違えることがある（本番で 00:10:35 を 01:00:35 と書いた）。
-    区切りの範囲に入らない時刻は、直前の正しい時刻で置き換える（発言の並びは書き起こしの順）。
+    区切りの範囲に入らない時刻は、直前の正しい時刻で置き換え、前の時刻より戻らないようにする。
+    範囲に入る時刻が半分に満たなければ時刻は当てにならないので、区切りの中に順に割り振る。
     """
+    mapped = [v + offset if v is not None else None for v in values]
+    valid = [t is not None and start - 60 <= t <= end + 60 for t in mapped]
+    if values and sum(valid) * 2 < len(values):
+        step = (end - start) / len(values)
+        return [start + int(i * step) for i in range(len(values))]
     out, prev = [], start
-    for v in values:
-        t = v + offset if v is not None else None
-        if t is None or not start - 60 <= t <= end + 60:
-            t = prev
+    for t, ok in zip(mapped, valid, strict=True):
+        t = min(max(t, prev), end) if ok and t is not None else prev
         out.append(t)
         prev = t
     return out
@@ -504,19 +510,19 @@ def _step_transcribe(repo: Repository, minutes: MeetingMinutes, event: Event,
     allowed = _member_ids(repo, event)
     raw = [s for s in data.get("segments") or [] if isinstance(s, dict) and s.get("text")]
     asks = [u for u in data.get("unclear") or [] if isinstance(u, dict) and u.get("at")]
-    offset = _chunk_offset([to_sec(s.get("start")) for s in raw], start, end)
-    starts = _chunk_times([to_sec(s.get("start")) for s in raw], start, end, offset)
+    values = [to_sec(s.get("start")) for s in raw]
+    offset = _chunk_offset(values, start, end)
+    starts = _chunk_times(values, start, end, offset)
     ats = _chunk_times([to_sec(u.get("at")) for u in asks], start, end, offset)
-    # 前後の区切りと重ねた部分は、境目（重なりの真ん中）で分けて二重に入れない
-    own_from = start + OVERLAP_SEC if start > 0 else 0
-    own_to = end - OVERLAP_SEC if end < (minutes.duration_sec or end) else end + 61
-
-    def own(sec: int) -> bool:
-        return own_from <= sec < own_to
-
+    # 時刻の当たり具合（発言の中身は出さない）。抜け・ずれを本番で調べられるように
+    known = [v for v in values if v is not None]
+    logger.info("minutes transcribe %s chunk %d/%d (%s-%s): segments=%d chars=%d "
+                "raw=%s..%s offset=%d in_range=%d", event.event_id, minutes.chunk + 1,
+                len(ranges), hms(start), hms(end), len(raw),
+                sum(len(str(s.get("text", ""))) for s in raw),
+                hms(min(known)) if known else "-", hms(max(known)) if known else "-", offset,
+                sum(1 for v in known if start - 60 <= v + offset <= end + 60))
     for s, sec in zip(raw, starts, strict=True):
-        if not own(sec):
-            continue
         speaker = _clean_member(s.get("speaker"), allowed)
         stop = to_sec(s.get("end"))
         stop = stop + offset if stop is not None else None
@@ -528,11 +534,10 @@ def _step_transcribe(repo: Repository, minutes: MeetingMinutes, event: Event,
             speaker=speaker, speaker_by=s.get("speaker_by") if speaker else None,
             proposal=s.get("proposal") or None, screen=s.get("screen") or None))
     for u, sec in zip(asks, ats, strict=True):
-        if own(sec):
-            minutes.unclear.append(MinutesUnclear(
-                unclear_id=uuid.uuid4().hex[:10], at=hms(sec),
-                kind=u.get("kind") or "word", question=str(u.get("question", "")),
-                context=str(u.get("context", ""))))
+        minutes.unclear.append(MinutesUnclear(
+            unclear_id=uuid.uuid4().hex[:10], at=hms(sec),
+            kind=u.get("kind") or "word", question=str(u.get("question", "")),
+            context=str(u.get("context", ""))))
     minutes.chunk += 1
     if minutes.chunk >= len(ranges):
         minutes.status = (MinutesStatus.verifying if repo.get_settings().minutes.verify_screen
