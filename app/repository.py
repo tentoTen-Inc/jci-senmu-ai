@@ -31,6 +31,7 @@ from .models import (
     LinkRequest,
     LinkState,
     MeetingDispatch,
+    MeetingMinutes,
     Member,
     MemberStatus,
     NoticeAction,
@@ -177,6 +178,10 @@ class Repository(Protocol):
     def get_meeting_dispatch(self, event_id: str) -> MeetingDispatch | None: ...
     def list_meeting_dispatches(self) -> list[MeetingDispatch]: ...
 
+    # --- 議事録 ---
+    def save_minutes(self, minutes: MeetingMinutes) -> None: ...
+    def get_minutes(self, event_id: str) -> MeetingMinutes | None: ...
+
 
 class InMemoryRepository:
     """テスト・ローカル用のインメモリ実装。"""
@@ -197,6 +202,7 @@ class InMemoryRepository:
         self._feedback_digest: FeedbackDigest | None = None
         self._notice_templates: dict[str, NoticeTemplate] = {}
         self._dispatches: dict[str, MeetingDispatch] = {}
+        self._minutes: dict[str, MeetingMinutes] = {}
         self._doc_turns: dict[str, list[DocTurn]] = {}
         self._doc_edits: dict[tuple[str, str], DocEdit] = {}
         self._proposal_creates: dict[str, PendingProposalCreate] = {}
@@ -574,6 +580,14 @@ class InMemoryRepository:
 
     def list_meeting_dispatches(self) -> list[MeetingDispatch]:
         return [d.model_copy(deep=True) for d in self._dispatches.values()]
+
+    # --- 議事録 ---
+    def save_minutes(self, minutes: MeetingMinutes) -> None:
+        self._minutes[minutes.event_id] = minutes.model_copy(deep=True)
+
+    def get_minutes(self, event_id: str) -> MeetingMinutes | None:
+        item = self._minutes.get(event_id)
+        return item.model_copy(deep=True) if item else None
 
 
 def utcnow() -> datetime:

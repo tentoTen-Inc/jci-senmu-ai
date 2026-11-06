@@ -180,6 +180,9 @@ class Member(BaseModel):
     contact: Contact = Field(default_factory=Contact)
     line_user_id: str | None = None
     linked_at: datetime | None = None
+    #: 会議で呼ばれる名前（名前の一部・あだ名）。議事録の話者の判定に使う
+    #: （docs/meeting-minutes-design.md §5.1）。会員の取込・名簿の同期では上書きしない
+    nicknames: list[str] = Field(default_factory=list)
 
     @property
     def committee_names(self) -> set[str]:
@@ -437,6 +440,17 @@ class EmailStyle(BaseModel):
     font_size: int = 11  # pt
 
 
+class MinutesSetting(BaseModel):
+    """議事録の設定（docs/meeting-minutes-design.md §9）。"""
+
+    #: 画面で確かめる箇所の上限（1回の会議）。超えたぶんは「不明点」に残す
+    verify_limit: int = 40
+    #: 用語集（委員会名・行事名・地名など）。台帳の委員会・会議は自動で足す
+    glossary: list[str] = Field(default_factory=list)
+    #: 議事録のドキュメントの置き場所（LOM のドライブのフォルダID）。空なら録画と同じフォルダ
+    folder_id: str | None = None
+
+
 class Settings(BaseModel):
     kill_switch: bool = False
     quiet_hours: QuietHours = Field(default_factory=QuietHours)
@@ -456,6 +470,8 @@ class Settings(BaseModel):
     doc_number: DocNumberSetting = Field(default_factory=lambda: DocNumberSetting())
     #: 案内メールの文字（§4.3）
     email_style: EmailStyle = Field(default_factory=lambda: EmailStyle())
+    #: 議事録（docs/meeting-minutes-design.md §9）
+    minutes: MinutesSetting = Field(default_factory=lambda: MinutesSetting())
 
 
 class DeliveryJob(BaseModel):
@@ -1058,3 +1074,131 @@ class MeetingDispatch(BaseModel):
     history: list[LineDispatch] = Field(default_factory=list)  # 送った LINE（新しいものが最後）
     updated_at: datetime | None = None
     updated_by: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# 会議の議事録（docs/meeting-minutes-design.md）
+# --------------------------------------------------------------------------- #
+class MinutesStatus(StrEnum):
+    queued = "queued"  # 作業を受け付けた
+    copying = "copying"  # 録画を一時置き場に写している
+    transcribing = "transcribing"  # 一次の読み取り（30分ずつ）
+    verifying = "verifying"  # 画面での確認
+    drafting = "drafting"  # まとめ
+    ready = "ready"  # 案あり（人の確認待ち）
+    failed = "failed"  # 3回失敗して止めた
+
+
+class MinutesSegment(BaseModel):
+    """書き起こしの一区切り（§5.3）。時刻は録画の頭からの "HH:MM:SS"。"""
+
+    start: str
+    end: str | None = None
+    speaker: str | None = None  # 会員ID。わからなければ None（名前を推測で書かない）
+    speaker_by: str | None = None  # voice | called | screen | human
+    text: str = ""
+    proposal: str | None = None  # 議案ID
+    screen: str | None = None  # 画面に映っていたもの（資料名・行など）
+    evidence: str | None = None  # 画面で確かめて直したときの根拠
+
+
+class MinutesUnclear(BaseModel):
+    """音声だけではわからなかった所（§5.3〜5.4）。"""
+
+    unclear_id: str
+    at: str
+    kind: str = "speaker"  # speaker | screen | word
+    question: str = ""
+    context: str = ""
+    status: str = "open"  # open | verified（画面で確かめた）| resolved（人が直した）| skipped
+    answer: str | None = None
+    evidence: str | None = None
+
+
+class MinutesOpinion(BaseModel):
+    by: str | None = None  # 会員ID
+    target: str | None = None  # 意見の箇所
+    point: str = ""
+    response: str | None = None
+    response_by: str | None = None
+
+
+class MinutesActionItem(BaseModel):
+    owner: str | None = None  # 会員ID
+    what: str = ""
+    due: str | None = None  # 「次の理事会まで」など
+
+
+class MinutesSection(BaseModel):
+    """議案（または議題）ごとのまとめ（§5.5）。"""
+
+    proposal: str | None = None
+    title: str = ""
+    explained: list[str] = Field(default_factory=list)
+    opinions: list[MinutesOpinion] = Field(default_factory=list)
+    decided: list[str] = Field(default_factory=list)
+    action_items: list[MinutesActionItem] = Field(default_factory=list)
+    for_absent: str | None = None
+
+
+class MinutesSensitive(BaseModel):
+    """内々の話（人事・入会候補・個人の事情など）。既定でグループ向けに入れない。"""
+
+    sensitive_id: str
+    at: str | None = None
+    kind: str = "private"  # personnel | candidate | private | money
+    summary: str = ""
+    include: bool = False
+
+
+class MinutesSend(BaseModel):
+    """議事録を送った記録。"""
+
+    kind: str = "group"  # group（会議体の要点）| committee（委員会向け）
+    channel: str = "group"  # group（LINE グループ）| user（個別の LINE）
+    to_id: str | None = None
+    to_name: str | None = None
+    committee: str | None = None
+    text: str = ""
+    sent_at: datetime | None = None
+    sent_by: str | None = None
+
+
+class CommitteeMinutes(BaseModel):
+    """委員会向けの議事録（その委員会に関わる所だけ）。"""
+
+    committee: str
+    text: str = ""
+    created_at: datetime | None = None
+
+
+class MeetingMinutes(BaseModel):
+    """会議の議事録の作業と案（§8）。"""
+
+    event_id: str
+    status: MinutesStatus = MinutesStatus.queued
+    #: 作業の版。やり直すと新しくなり、古い版の作業の知らせは捨てる
+    run_id: str = ""
+    #: 作業の段の通し番号。同じ段を二重に進めない
+    seq: int = 0
+    recording_file_id: str | None = None
+    recording_name: str | None = None
+    recording_folder_id: str | None = None
+    source: str = "meet_recording"  # meet_recording | meet_transcript | upload
+    gcs_uri: str | None = None
+    duration_sec: int | None = None
+    chunk: int = 0  # 一次の読み取りで次に読む区切り（0 始まり）
+    segments: list[MinutesSegment] = Field(default_factory=list)
+    unclear: list[MinutesUnclear] = Field(default_factory=list)
+    sections: list[MinutesSection] = Field(default_factory=list)
+    confirmations: list[str] = Field(default_factory=list)
+    sensitive: list[MinutesSensitive] = Field(default_factory=list)
+    committees: list[CommitteeMinutes] = Field(default_factory=list)
+    doc_id: str | None = None
+    sends: list[MinutesSend] = Field(default_factory=list)
+    attempts: int = 0
+    error: str | None = None
+    requested_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    edited_by: str | None = None

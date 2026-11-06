@@ -55,6 +55,7 @@ type MemberDetail = {
   status: string;
   contact: Contact;
   line_user_id: string | null;
+  nicknames?: string[];
 };
 type History = {
   name: string;
@@ -388,6 +389,8 @@ function MemberDrawer({
   const { confirm, toast } = useUi();
   const [edit, setEdit] = useState<MemberDetail | null>(null);
   const [origStatus, setOrigStatus] = useState<string | null>(null);
+  // 会議で呼ばれる名前（「、」区切りで入れる。議事録の話者の判定に使う）
+  const [nick, setNick] = useState("");
   const [hist, setHist] = useState<History | null>(null);
   const [invite, setInvite] = useState<Invite | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -402,6 +405,7 @@ function MemberDrawer({
       .then((m) => {
         setEdit(m);
         setOrigStatus(m.status);
+        setNick((m.nicknames ?? []).join("、"));
       })
       .catch((e) => setErr((e as Error).message));
   }, [row.member_id]);
@@ -436,6 +440,7 @@ function MemberDrawer({
           member_type: edit.member_type,
           status: edit.status,
           contact: edit.contact,
+          nicknames: nick.split(/[、,，\s]+/).map((x) => x.trim()).filter(Boolean),
         }),
       });
       toast(`${edit.name} さんの情報を保存しました`);
@@ -516,6 +521,9 @@ function MemberDrawer({
               </Field>
               <Field label="ふりがな">
                 <input className="w-full" value={edit.kana ?? ""} onChange={(e) => set({ kana: e.target.value || null })} />
+              </Field>
+              <Field label="呼び名" hint="会議で呼ばれる名前（「、」区切り）。議事録で誰が話したかを当てるのに使います">
+                <input className="w-full" placeholder="例: 〇〇くん、〇〇ちゃん" value={nick} onChange={(e) => setNick(e.target.value)} />
               </Field>
               <Field label="役職" hint="理事長・副理事長・専務理事・監事 など">
                 <input className="w-full" value={edit.officer_role ?? ""} onChange={(e) => set({ officer_role: e.target.value || null })} />

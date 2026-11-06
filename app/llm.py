@@ -308,6 +308,12 @@ TASK_MODELS: dict[str, str] = {
     "feedback_triage": PRO,
     # 意見箱の傾向のまとめ（似た意見をまとめた論点と件数）。管理画面のボタンから・件数少
     "feedback_digest": PRO,
+    # 議事録（docs/meeting-minutes-design.md §5.7）。会議の後に非同期で作るので待たせない。
+    # 誤りのある議事録は信頼を失うので、どれも品質を優先する
+    "minutes_transcribe": PRO,  # 録画の書き起こしと話者の判定（呼び名・画面の発言中の枠から）
+    "minutes_verify": PRO,  # わからない所の画面の細かい読み取り（資料の行・表示名）
+    "minutes_draft": PRO,  # 議案ごとの要点・意見・宿題の抽出
+    "minutes_committee": PRO,  # 委員会に関わる意見の抜き出し（議案の外に散らばる意見も拾う）
 }
 
 
