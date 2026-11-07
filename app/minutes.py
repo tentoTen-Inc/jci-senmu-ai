@@ -260,11 +260,14 @@ def _video_part(gcs_uri: str, start: int, end: int, fps: float) -> dict:
 
 
 def generate(task: str, parts: list[dict], *, resolution: str | None = None,
-             thinking_budget: int | None = None, timeout: int = 540) -> tuple[dict, InferenceUsage]:
-    """録画・本文を渡して JSON を受け取る。"""
+             thinking_budget: int | None = None, timeout: int = 540,
+             schema: dict | None = None) -> tuple[dict, InferenceUsage]:
+    """録画・本文を渡して JSON を受け取る。schema を渡すと、その形で返させる。"""
     model, project, location = llm._target(task)
     body: dict = {"contents": [{"role": "user", "parts": parts}],
                   "generationConfig": {"responseMimeType": "application/json"}}
+    if schema:
+        body["generationConfig"]["responseSchema"] = schema
     if resolution:
         body["generationConfig"]["mediaResolution"] = resolution
     if thinking_budget is not None:
@@ -371,6 +374,31 @@ _TRANSCRIBE_PROMPT = """あなたは青年会議所の会議の書記です。
  "unclear": [{{"at": "HH:MM:SS", "kind": "speaker" | "screen" | "word",
   "question": "確かめたいこと", "context": "前後の発言の要約"}}]}}
 """
+
+
+def _nullable(kind: str = "STRING") -> dict:
+    return {"type": kind, "nullable": True}
+
+
+#: 書き起こしの返事の形。形を決めないと、本番で区切りによって発言が1件も入らない返事があった
+TRANSCRIBE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "segments": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {"start": {"type": "STRING"}, "end": _nullable(),
+                           "speaker": _nullable(), "speaker_by": _nullable(),
+                           "text": {"type": "STRING"}, "proposal": _nullable(),
+                           "screen": _nullable()},
+            "required": ["start", "text"]}},
+        "unclear": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {"at": {"type": "STRING"}, "kind": {"type": "STRING"},
+                           "question": {"type": "STRING"}, "context": {"type": "STRING"}},
+            "required": ["at", "question"]}},
+    },
+    "required": ["segments", "unclear"],
+}
 
 
 _VERIFY_PROMPT = """あなたは青年会議所の会議の書記です。書き起こしで音声だけではわからなかった所を、
@@ -504,11 +532,21 @@ def _step_transcribe(repo: Repository, minutes: MeetingMinutes, event: Event,
                             {"text": prompt}],
                            resolution="MEDIA_RESOLUTION_LOW", thinking_budget=128,
                            # 1区切りは通常 1〜2 分。返事が止まったときは早めに打ち切ってやり直す
-                           timeout=300)
+                           timeout=300, schema=TRANSCRIBE_SCHEMA)
     record_inference(repo, kind="minutes_transcribe", usage=usage, now=now,
                      target=event.event_id)
     allowed = _member_ids(repo, event)
-    raw = [s for s in data.get("segments") or [] if isinstance(s, dict) and s.get("text")]
+    found = data.get("segments") or data.get("items") or []  # 配列だけで返ったときは items
+    raw = [s for s in found if isinstance(s, dict) and s.get("text")]
+    if not raw and end - start >= 120:
+        # 会議の15分が空のことはまずない。やり直し、それでも空なら人が確かめる所として残す
+        if minutes.attempts < MAX_ATTEMPTS - 1:
+            raise RuntimeError(f"{hms(start)}〜{hms(end)} の書き起こしが空でした"
+                               f"（返事の項目: {', '.join(list(data)[:5]) or 'なし'}）")
+        minutes.unclear.append(MinutesUnclear(
+            unclear_id=uuid.uuid4().hex[:10], at=hms(start), kind="gap",
+            question=f"{hms(start)}〜{hms(end)} を書き起こせませんでした。"
+                     "録画を見て、必要なら発言を足してください。"))
     asks = [u for u in data.get("unclear") or [] if isinstance(u, dict) and u.get("at")]
     values = [to_sec(s.get("start")) for s in raw]
     offset = _chunk_offset(values, start, end)
@@ -516,9 +554,9 @@ def _step_transcribe(repo: Repository, minutes: MeetingMinutes, event: Event,
     ats = _chunk_times([to_sec(u.get("at")) for u in asks], start, end, offset)
     # 時刻の当たり具合（発言の中身は出さない）。抜け・ずれを本番で調べられるように
     known = [v for v in values if v is not None]
-    logger.info("minutes transcribe %s chunk %d/%d (%s-%s): segments=%d chars=%d "
+    logger.info("minutes transcribe %s chunk %d/%d (%s-%s): keys=%s segments=%d chars=%d "
                 "raw=%s..%s offset=%d in_range=%d", event.event_id, minutes.chunk + 1,
-                len(ranges), hms(start), hms(end), len(raw),
+                len(ranges), hms(start), hms(end), ",".join(list(data)[:5]), len(raw),
                 sum(len(str(s.get("text", ""))) for s in raw),
                 hms(min(known)) if known else "-", hms(max(known)) if known else "-", offset,
                 sum(1 for v in known if start - 60 <= v + offset <= end + 60))
