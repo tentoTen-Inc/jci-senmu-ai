@@ -164,6 +164,16 @@ def test_valid_link_opens_file_inline(storage):
     assert res.headers["cache-control"] == "private, no-store"
 
 
+def test_html_file_is_downloaded_not_rendered(storage, monkeypatch):
+    """HTML や SVG はこのドメインで表示させない（スクリプトが動くと LIFF のトークンを盗まれる）。"""
+    monkeypatch.setattr(lake_api, "_gcs_download",
+                        lambda uri: (b"<script>alert(1)</script>", "text/html"))
+    res = client.get(f"/files/{file_links.make_token('634944787685835148', 'U_sed')}")
+    assert res.headers["content-type"] == "application/octet-stream"
+    assert res.headers["content-disposition"].startswith("attachment;")
+    assert res.headers["content-security-policy"].startswith("sandbox")
+
+
 def test_invalid_link_is_rejected(storage):
     assert client.get("/files/forged.signature").status_code == 403
 
