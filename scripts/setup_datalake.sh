@@ -7,7 +7,8 @@
 #            └ Push サブスクリプション → ワーカー(/pubsub/line-worker) → Cloud Storage
 #
 # 前提: gcloud / bq がプロジェクトのオーナー相当で認証済み。
-#       案件ごとの認証分離のため、このリポジトリ直下で direnv 有効な状態で実行すること。
+#       必要な環境変数（GCP_PROJECT_ID など）を設定した状態で、リポジトリ直下で実行する。
+#       例: set -a; source .env; set +a
 # 使い方: ./scripts/setup_datalake.sh
 set -euo pipefail
 

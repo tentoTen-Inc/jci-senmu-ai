@@ -35,8 +35,9 @@ TEXT_LIMIT = 40000  # 1ファイルあたりの本文の上限（文字）
 SYNC_BATCH = 40  # 1回の tick で本文を取り直すファイル数の上限（残りは次回）
 SYNC_SECONDS = 60  # 本文の取り出しに使う時間の上限（tick 全体を Scheduler の期限内に収める）
 
-#: 取り込まないもの（個人情報）。フォルダ名・ファイル名のどちらかに含まれていたら除外
-EXCLUDE_PATTERNS = re.compile(r"名簿|住所録|入会|認承証|個人情報|事務局")
+#: 取り込まないもの（個人情報）の既定の語。フォルダ名・ファイル名のどちらかに含まれていたら除外。
+#: LOM ごとの語は環境変数 DRIVE_EXCLUDE_WORDS（カンマ区切り）で足す（既定の語は外せない）
+EXCLUDE_WORDS = ("名簿", "住所録", "入会", "認承証", "個人情報", "事務局")
 #: 五役・監事にだけ使うフォルダ（パスの一部に含まれていたら officers）
 OFFICER_FOLDERS = re.compile(r"執行部|五役会")
 OFFICER_ROLES = ("理事長", "副理事長", "専務理事", "監事", "直前理事長")
@@ -66,8 +67,19 @@ def scopes_for(member) -> list[str]:
     return ["members", "officers"] if member.officer_role in OFFICER_ROLES else ["members"]
 
 
+def exclude_words() -> list[str]:
+    """取り込まない語。既定の語に、環境変数 DRIVE_EXCLUDE_WORDS（カンマ区切り）の語を足したもの。"""
+    words = list(EXCLUDE_WORDS)
+    for word in os.environ.get("DRIVE_EXCLUDE_WORDS", "").replace("、", ",").split(","):
+        word = word.strip()
+        if word and word not in words:
+            words.append(word)
+    return words
+
+
 def excluded(path: str, title: str) -> bool:
-    return bool(EXCLUDE_PATTERNS.search(path) or EXCLUDE_PATTERNS.search(title))
+    """フォルダのパスかファイル名に、取り込まない語が含まれているか。"""
+    return any(word in path or word in title for word in exclude_words())
 
 
 # --------------------------------------------------------------------------- #

@@ -33,6 +33,6 @@ cat <<EOF
 次の手動作業（必要時）:
   - LINE Webhook URL を ${URL}/line/webhook に設定（API: PUT /v2/bot/channel/webhook/endpoint）
   - LINE 管理画面で「Webhookの利用」を ON、「応答メッセージ」を OFF
-  - 既定催促ポリシー投入: curl -X POST ${URL}/admin/policies/seed -H "X-Admin-Token: <secret>"
+  - 既定の催促ルール: 管理画面の「設定」→「催促のタイミング」で［標準の設定を入れる］を押す
   - リッチメニュー登録: LINE_CHANNEL_ACCESS_TOKEN=... python scripts/setup_rich_menu.py
 EOF

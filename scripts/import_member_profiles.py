@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """日本JCの会員名簿（JSON）を会員情報に取り込む CLI（既定は確認だけ。--apply で書き込み）。
 
-使い方（リポジトリ直下・direnv 有効な状態で）:
-  GCP_PROJECT_ID=<プロジェクト> direnv exec . .venv/bin/python \\
+使い方（リポジトリ直下。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で
+  例: set -a; source .env; set +a）:
+  .venv/bin/python \\
       scripts/import_member_profiles.py data/jc-roster-20261013.json             # 変更点の確認
-  GCP_PROJECT_ID=<プロジェクト> direnv exec . .venv/bin/python \\
+  .venv/bin/python \\
       scripts/import_member_profiles.py data/jc-roster-20261013.json --apply     # 書き込み
 
 - JSON は {"as_of": "YYYY-MM-DD", "members": [RosterRow, ...]}（app/member_profile_import.py）。
