@@ -227,6 +227,45 @@ def test_screen_check_is_off_by_default(repo):
     assert minutes.segments[1].speaker is None
 
 
+def _with_transcripts(repo, monkeypatch, replies):
+    """書き起こしの返事を順に差し替える（ほかの段は元のモックのまま）。"""
+    original = mn.generate
+    queue = list(replies)
+
+    def generate(task, parts, **kw):
+        if task == "minutes_transcribe":
+            repo.calls.append((task, parts, kw))
+            return queue.pop(0), mn.InferenceUsage(model="m", input_tokens=1, output_tokens=1)
+        return original(task, parts, **kw)
+
+    monkeypatch.setattr(mn, "generate", generate)
+
+
+def test_empty_chunk_is_retried(repo, monkeypatch):
+    # 本番で区切りによって発言が1件も入らない返事があった → やり直して埋める
+    _with_transcripts(repo, monkeypatch, [{"segments": [], "unclear": []}, *TRANSCRIPTS])
+    minutes = _ready(repo)
+    assert minutes.status == MinutesStatus.ready
+    assert len([c for c in repo.calls if c[0] == "minutes_transcribe"]) == 3
+    assert minutes.segments[0].start == "00:00:10"
+    assert repo.calls[0][2]["schema"] is mn.TRANSCRIBE_SCHEMA  # 返事の形を決めて頼む
+
+
+def test_empty_chunk_left_for_people_after_retries(repo, monkeypatch):
+    empty = {"segments": [], "unclear": []}
+    _with_transcripts(repo, monkeypatch, [empty, empty, empty, TRANSCRIPTS[1]])
+    minutes = _ready(repo)
+    assert minutes.status == MinutesStatus.ready
+    gap = next(u for u in minutes.unclear if u.kind == "gap")
+    assert gap.at == "00:00:00" and "00:00:00〜00:15:00 を書き起こせませんでした" in gap.question
+
+
+def test_list_reply_is_read_as_segments(repo, monkeypatch):
+    _with_transcripts(repo, monkeypatch, [{"items": TRANSCRIPTS[0]["segments"]}, TRANSCRIPTS[1]])
+    minutes = _ready(repo)
+    assert minutes.segments[0].text == "第1号議案の説明をします"
+
+
 def test_stale_and_duplicate_messages_are_ignored(repo):
     client.post("/api/events/ev1/minutes", json={"recording": REC})
     first = repo.published.pop(0)

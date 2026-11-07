@@ -59,7 +59,7 @@ const STEPS: Record<Minutes["status"], string> = {
   failed: "止まりました",
 };
 const SENSITIVE_KINDS: Record<string, string> = { personnel: "人事", candidate: "入会候補", private: "個人の事情", money: "お金" };
-const UNCLEAR_KINDS: Record<string, string> = { speaker: "話者", screen: "画面", word: "語" };
+const UNCLEAR_KINDS: Record<string, string> = { speaker: "話者", screen: "画面", word: "語", gap: "書き起こしの抜け" };
 
 /** 録画の時刻（HH:MM:SS）の位置で開く */
 function atUrl(url: string | null | undefined, at: string): string | undefined {

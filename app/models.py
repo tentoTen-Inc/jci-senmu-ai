@@ -1143,7 +1143,7 @@ class MinutesUnclear(BaseModel):
 
     unclear_id: str
     at: str
-    kind: str = "speaker"  # speaker | screen | word
+    kind: str = "speaker"  # speaker | screen | word | gap（区切りを書き起こせなかった）
     question: str = ""
     context: str = ""
     status: str = "open"  # open | verified（画面で確かめた）| resolved（人が直した）| skipped
