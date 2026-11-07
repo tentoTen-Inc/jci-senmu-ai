@@ -64,7 +64,7 @@ def _names(repo: Repository) -> dict[str, Member]:
 
 
 def _title(m: Member | None, fallback: str = "") -> str:
-    """役職＋名字（例: 理事長 渡部 → 「渡部理事長」）。役職がなければ名字＋さん。"""
+    """役職＋名字（例: 理事長 青木 → 「青木理事長」）。役職がなければ名字＋さん。"""
     if m is None:
         return fallback
     family = m.name.split()[0] if m.name.split() else m.name

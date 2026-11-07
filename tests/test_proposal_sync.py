@@ -49,7 +49,7 @@ def test_apply_fields_maps_sections_basics_and_feedback():
         "委員長": "松本 颯太",
         "1.事業実施に至る背景・問題": "若手の発言の機会が少ない",
         "4.実施日と実施前後のスケジュール": "■実施日\n2027年3月23日(火)\n19:00〜21:00",
-        "5.実施場所": "■猪苗代町体験交流館\n〒969-3123",
+        "5.実施場所": "■市民交流センター\n〒000-0000",
         "10.対象者及び参加員数": "正会員13名",
         "五役会議①・意見1・質問者/回答者": "青木 一郎",
         "五役会議①・意見1・内容": "目的をもう少し具体的に",
@@ -62,7 +62,7 @@ def test_apply_fields_maps_sections_basics_and_feedback():
     assert p.basics == {"委員会名": "総務委員会", "委員長": "松本 颯太"}
     assert p.sections["1.事業実施に至る背景・問題"] == "若手の発言の機会が少ない"
     assert (p.event_date, p.fiscal_year) == ("2027-03-23", 2027)
-    assert (p.venue, p.participants) == ("猪苗代町体験交流館", "正会員13名")
+    assert (p.venue, p.participants) == ("市民交流センター", "正会員13名")
     assert [(f.meeting, f.kind, f.no, f.person) for f in p.feedback] == [
         ("五役会議①", "意見", 1, "青木 一郎"), ("五役会議①", "対応", 1, None)]
     assert p.stage == ProposalStage.board  # 状態は文書から変えない

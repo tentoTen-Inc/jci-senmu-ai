@@ -265,10 +265,11 @@ def test_script_sets_deadline_and_meeting_only_with_apply(repo, capsys):
         repo.upsert_proposal(p.model_copy(update={"deadlines": ProposalDeadlines(),
                                                   "meeting_poll_id": None}))
     repo.upsert_proposal(Proposal(proposal_id="plan", title="3月例会", committee="総務委員会"))
-    assert script.main([], repo=repo) == 0
+    args = ["--deadline", DEADLINE.isoformat(timespec="minutes"), "--poll", "poll_08649098fc"]
+    assert script.main(args, repo=repo) == 0
     assert repo.get_proposal("ps1").deadlines.submit is None  # 確認だけ
     assert "第2回五役予定者会議" in capsys.readouterr().out
-    assert script.main(["--apply"], repo=repo) == 0
+    assert script.main([*args, "--apply"], repo=repo) == 0
     for pid in ("ps1", "ps2"):
         p = repo.get_proposal(pid)
         assert (p.deadlines.submit, p.meeting_poll_id) == (DEADLINE, "poll_08649098fc")
