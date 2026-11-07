@@ -33,9 +33,9 @@ def test_normalize_code():
 
 
 def test_invite_url():
-    url = invite_url("ABC123", "@782uyboi")
+    url = invite_url("ABC123", "@000sample")
     assert "ABC123" in url
-    assert "@782uyboi" in url
+    assert "@000sample" in url
 
 
 def test_issue_and_link_success():

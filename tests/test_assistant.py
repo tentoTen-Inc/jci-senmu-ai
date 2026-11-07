@@ -26,7 +26,7 @@ NOW = datetime(2026, 7, 25, 10, 0)
 ME = "m1"
 
 
-def answer_json(answer="次回の例会は8月20日19時、会場は猪苗代町体験交流館です。", grounded=True,
+def answer_json(answer="次回の例会は8月20日19時、会場は市民交流センターです。", grounded=True,
                 needs_human=False) -> str:
     import json
 
@@ -51,7 +51,7 @@ def repo():
     r.upsert_event(Event(
         event_id="e1", type=EventType.例会, title="8月例会",
         datetime_start=datetime(2026, 8, 20, 19, 0),
-        location="猪苗代町体験交流館",
+        location="市民交流センター",
         attendance_deadline=datetime(2026, 8, 13, 23, 59),
         target_scope=TargetScope(kind=TargetScopeKind.all),
         status=EventStatus.open,
@@ -77,7 +77,7 @@ def test_context_includes_own_and_event_info(repo):
     assert "江口太郎" in ctx
     assert "総務委員会" in ctx and "専務理事" in ctx
     assert "8月例会" in ctx
-    assert "猪苗代町体験交流館" in ctx
+    assert "市民交流センター" in ctx
     assert "2026-08-13 23:59" in ctx  # 出欠締切
     assert "あなたの回答: 未回答" in ctx
     assert "全体の回答: 1/2名" in ctx  # 人数だけ
