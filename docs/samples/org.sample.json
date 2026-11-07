@@ -1,0 +1,50 @@
+[
+  {
+    "name": "山田 太郎",
+    "kana": "やまだ たろう",
+    "officer_role": "理事長"
+  },
+  {
+    "name": "佐藤 次郎",
+    "kana": "さとう じろう",
+    "officer_role": "副理事長",
+    "supervised_committees": ["総務委員会", "まちづくり委員会"]
+  },
+  {
+    "name": "鈴木 三郎",
+    "kana": "すずき さぶろう",
+    "officer_role": "専務理事",
+    "secondments": [{"org": "○○ブロック協議会", "role": "運営専務"}]
+  },
+  {
+    "name": "高橋 四郎",
+    "kana": "たかはし しろう",
+    "officer_role": "監事"
+  },
+  {
+    "name": "田中 花子",
+    "kana": "たなか はなこ",
+    "committees": [{"committee": "総務委員会", "role": "委員長"}]
+  },
+  {
+    "name": "伊藤 五郎",
+    "kana": "いとう ごろう",
+    "committees": [
+      {"committee": "まちづくり委員会", "role": "委員長"},
+      {"committee": "総務委員会", "role": "委員"}
+    ]
+  },
+  {
+    "name": "渡辺 六郎",
+    "committees": [{"committee": "まちづくり委員会", "role": "副委員長"}]
+  },
+  {
+    "name": "小林 七海",
+    "member_type": "youth_support",
+    "committees": [{"committee": "総務委員会", "role": "委員"}]
+  },
+  {
+    "name": "中村 八重",
+    "member_type": "office"
+  }
+]

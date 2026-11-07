@@ -8,7 +8,8 @@
 #   コンソール → Monitoring → アラート → 「通知チャンネルを編集」→ Slack →「新規追加」
 #   → Slack にサインインして許可 → 通知先チャンネルを選ぶ（表示名は任意）
 #   Slack の通知先が複数あるときは SLACK_CHANNEL_DISPLAY_NAME に表示名かチャンネル名を指定する
-# 使い方: BUDGET_EMAIL=通知先メール ./scripts/setup_ops.sh   （direnv 有効な状態で）
+# 使い方: BUDGET_EMAIL=通知先メール ./scripts/setup_ops.sh
+#   （必要な環境変数（GCP_PROJECT_ID など）を設定した状態で。例: set -a; source .env; set +a）
 set -euo pipefail
 
 PROJECT="${GCP_PROJECT_ID:?GCP_PROJECT_ID を設定してください}"

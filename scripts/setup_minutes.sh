@@ -7,7 +7,7 @@
 #
 # 前提: setup_datalake.sh 済み（Push 用 SA・PUBSUB_PUSH_AUDIENCE）、かつ /pubsub/minutes を
 #       含むコードがデプロイ済み（main へのマージ後に実行する）。
-# 使い方: GCP_PROJECT_ID=<プロジェクト> direnv exec . ./scripts/setup_minutes.sh
+# 使い方: GCP_PROJECT_ID=<プロジェクト> ./scripts/setup_minutes.sh
 set -euo pipefail
 
 PROJECT="${GCP_PROJECT_ID:?GCP_PROJECT_ID を設定してください}"

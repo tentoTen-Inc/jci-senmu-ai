@@ -3,7 +3,8 @@
 #
 #   Cloud Run (app-runtime) ──権限借用──► doc-editor ──► Docs API（04-委員会 の資料だけ）
 #
-# 前提: gcloud がオーナー相当で認証済み（direnv 有効な状態で実行）。
+# 前提: gcloud がオーナー相当で認証済み。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で実行する。
+#       例: set -a; source .env; set +a
 # 使い方: ./scripts/setup_doc_editor.sh <04-委員会のフォルダID>
 # 実行後: ドライブで 04-委員会 フォルダを doc-editor@<project>.iam.gserviceaccount.com に「編集者」で共有する。
 set -euo pipefail

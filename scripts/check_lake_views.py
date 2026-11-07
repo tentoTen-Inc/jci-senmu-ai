@@ -4,7 +4,8 @@
 データセットが無くても実行でき、読むのはリテラルだけなので課金も発生しない。
 ビューを追加・変更したら、セットアップ前にこれで構文と結果を確認する。
 
-使い方（リポジトリ直下・direnv 有効な状態で）:
+使い方（リポジトリ直下。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で
+  例: set -a; source .env; set +a）:
   .venv/bin/python scripts/check_lake_views.py v_messages          # SQL を表示
   .venv/bin/python scripts/check_lake_views.py v_messages --run    # bq で実行して結果を表示
 """
