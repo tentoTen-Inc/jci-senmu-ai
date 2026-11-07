@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from linebot.v3.messaging import FlexContainer, FlexMessage, Message, TextMessage
 
@@ -29,6 +29,8 @@ logger = logging.getLogger("jci-agent.line_link")
 
 ACTION_LINK = "link"  # postback: link|approve|<line_user_id> / link|reject|<line_user_id>
 APPROVER_ROLES = ("専務理事",)
+#: 同じ申請をもう一度出したとき、専務に知らせ直すまでの間隔
+RENOTIFY_AFTER = timedelta(hours=1)
 
 
 def liff_link_url() -> str:
@@ -39,11 +41,14 @@ def liff_link_url() -> str:
 # 申請（LIFF）
 # --------------------------------------------------------------------------- #
 def authorize(repo: Repository, user_id: str) -> None:
-    """申請画面を使えるのは、ボットが入っているいずれかのグループのメンバーだけ。"""
+    """申請画面を使えるのは、LOM のグループ（ボットが入っていて、連携済みの会員が発言した
+    ことがあるグループ）のメンバーだけ。知らない人がボットを自分のグループに招いても、
+    会員の名前の一覧は見られない。"""
     if repo.get_member_by_line_user_id(user_id):
         return
     for group in repo.list_line_groups():
         if (group.left_at is None and group.source_type == "group"
+                and group.member_seen_at is not None
                 and sp.is_group_member(group.group_id, user_id)):
             return
     raise sp.PollError(
@@ -86,6 +91,11 @@ def request_link(repo: Repository, user_id: str, display_name: str | None, membe
                 and r.status == LinkRequestStatus.pending):
             raise sp.PollError(
                 409, "その方は別の LINE アカウントで申請中です。事務局にご連絡ください。")
+    previous = repo.get_link_request(user_id)
+    if (previous and previous.status == LinkRequestStatus.pending
+            and previous.member_id == member_id and previous.requested_at
+            and now - previous.requested_at < RENOTIFY_AFTER):
+        return previous  # 同じ申請の連打では、専務に何度も送らない
     request = LinkRequest(line_user_id=user_id, display_name=display_name, member_id=member_id,
                           requested_at=now)
     repo.save_link_request(request)

@@ -89,6 +89,24 @@ def test_admin_token_works_on_both_services(monkeypatch):
         assert TestClient(main.app).get("/api/members", headers=wrong).status_code == 401
 
 
+def test_public_service_closes_admin_api_by_default(monkeypatch):
+    """公開サービスの既定では、共有シークレットがあっても管理 API に届かない（/tasks だけ通す）。"""
+    monkeypatch.delenv("ROLE", raising=False)
+    monkeypatch.delenv("PUBLIC_ADMIN_API")
+    public = TestClient(main.app)
+    for path in ("/api/members", "/admin/events"):
+        assert public.get(path, headers=ADMIN_AUTH).status_code == 404, path
+    assert public.post("/tasks/tick", headers={"X-Admin-Token": "wrong"}).status_code == 401
+    # 管理サービスではそのまま使える
+    monkeypatch.setenv("ROLE", "admin")
+    assert TestClient(main.app).get("/api/members", headers=ADMIN_AUTH).status_code == 200
+
+
+def test_api_docs_are_hidden():
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert TestClient(main.app).get(path).status_code == 404, path
+
+
 def test_settings_update_writes_audit(repo):
     body = {
         "kill_switch": True,

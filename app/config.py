@@ -20,6 +20,16 @@ def behind_iap() -> bool:
     return os.environ.get("ROLE", "").strip() == "admin"
 
 
+def public_admin_api() -> bool:
+    """公開サービスでも /admin・/api を X-Admin-Token で使えるか（環境変数 PUBLIC_ADMIN_API=on）。
+
+    既定は閉じる。管理画面・管理 API は IAP で守られた管理サービスで使う。公開サービスで
+    開いていると、共有シークレット 1 つでインターネットから名簿や一斉送信に届いてしまう。
+    移行や緊急時に一時的に開くためだけの設定。
+    """
+    return os.environ.get("PUBLIC_ADMIN_API", "").strip().lower() in ("on", "1", "true")
+
+
 def async_line_reply() -> bool:
     """LINE への返信を Webhook の外（Pub/Sub → /pubsub/line-reply）で作るか。
 
@@ -30,7 +40,10 @@ def async_line_reply() -> bool:
 
 
 def admin_api_secret() -> str | None:
-    """/admin・/tasks 保護用の共有シークレット（環境変数 or Secret Manager）。"""
+    """/tasks（Cloud Scheduler）保護用の共有シークレット（環境変数 or Secret Manager）。
+
+    管理サービスと、PUBLIC_ADMIN_API=on の公開サービスでは /admin・/api にも効く。
+    """
     return get_secret("ADMIN_API_SECRET", "admin-api-secret")
 
 

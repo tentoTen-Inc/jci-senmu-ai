@@ -16,6 +16,9 @@ os.environ.setdefault("LINE_CHANNEL_SECRET", "test_channel_secret")
 os.environ.setdefault("LINE_CHANNEL_ACCESS_TOKEN", "PLACEHOLDER_SET_ME")
 os.environ.setdefault("GCP_PROJECT_ID", "test-project")
 os.environ.setdefault("ADMIN_API_SECRET", "test-admin-secret")
+# 管理 API のテストは X-Admin-Token で呼ぶので、公開サービスでも開いた状態で動かす。
+# 既定で閉じていることは test_api_foundation で確かめる
+os.environ.setdefault("PUBLIC_ADMIN_API", "on")
 os.environ.setdefault("ADMIN_BASE_URL", "https://admin.example.org")
 os.environ.setdefault("IAP_AUDIENCE", "/projects/1/locations/asia-northeast1/services/test-admin")
 
