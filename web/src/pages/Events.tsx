@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { api } from "../api/client";
 import DispatchPanel from "../components/DispatchPanel";
+import MinutesPanel from "../components/MinutesPanel";
 import {
   Badge,
   Button,
@@ -886,6 +887,8 @@ function DetailDrawer({
                 </Panel>
 
                 {event.status !== "cancelled" && <DispatchPanel eventId={event.event_id} />}
+                {/* 議事録は会議が始まった後から（当日の会議の後にも作れるように時刻で見る） */}
+                {event.status !== "cancelled" && new Date(event.datetime_start) <= new Date() && <MinutesPanel eventId={event.event_id} />}
 
                 <Panel
                   title="会員ごとの回答"

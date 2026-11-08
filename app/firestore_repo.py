@@ -30,6 +30,7 @@ from .models import (
     LinkRequest,
     LinkState,
     MeetingDispatch,
+    MeetingMinutes,
     Member,
     MemberStatus,
     NoticeAction,
@@ -76,6 +77,7 @@ COL_FEEDBACK = "feedbackBox"  # 意見箱（docs/feedback-box-design.md）
 FEEDBACK_DIGEST_DOC = "feedbackDigest"  # settings コレクション内の傾向のまとめ
 COL_NOTICE_TEMPLATES = "noticeTemplates"  # 通知テンプレート（docs/meeting-notice-design.md）
 COL_DISPATCHES = "meetingDispatches"  # 会議の配信物
+COL_MINUTES = "meetingMinutes"  # 会議の議事録（docs/meeting-minutes-design.md §8）
 COL_LINE_EVENT_CLAIMS = "lineEventClaims"  # TTL（expire_at）で自動削除
 LINE_EVENT_CLAIM_TTL = timedelta(days=7)  # LINE の再送・Pub/Sub の保持（7日）より長く
 SETTINGS_DOC = "global"
@@ -537,3 +539,13 @@ class FirestoreRepository:
     def list_meeting_dispatches(self) -> list[MeetingDispatch]:
         return [MeetingDispatch.model_validate(d.to_dict())
                 for d in self._db.collection(COL_DISPATCHES).stream()]
+
+    # --- 議事録 ---
+    def save_minutes(self, minutes: MeetingMinutes) -> None:
+        self._db.collection(COL_MINUTES).document(minutes.event_id).set(
+            minutes.model_dump(mode="json")
+        )
+
+    def get_minutes(self, event_id: str) -> MeetingMinutes | None:
+        snap = self._db.collection(COL_MINUTES).document(event_id).get()
+        return MeetingMinutes.model_validate(snap.to_dict()) if snap.exists else None

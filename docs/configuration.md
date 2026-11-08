@@ -24,7 +24,7 @@
 |---|---|---|---|
 | `LINE_CHANNEL_SECRET` | `line-channel-secret` | LINE Webhook の署名検証 | ○ |
 | `LINE_CHANNEL_ACCESS_TOKEN` | `line-channel-access-token` | LINE への送信 | ○ |
-| `ADMIN_API_SECRET` | `admin-api-secret` | `/tasks`・`/admin` を呼ぶときの共有シークレット（ヘッダ `X-Admin-Token`）。回答の出典ファイルを開く署名付きリンクの鍵にも使う | ○ |
+| `ADMIN_API_SECRET` | `admin-api-secret` | `/tasks` を呼ぶときの共有シークレット（ヘッダ `X-Admin-Token`。Cloud Scheduler が使う）。回答の出典ファイルを開く署名付きリンクの鍵にも使う | ○ |
 | `GMAIL_OAUTH_CLIENT_ID` | `gmail-oauth-client-id` | 対外連絡メールの取込・議案の送信（LOM 公式 Gmail の OAuth） | 対外連絡を使う場合 |
 | `GMAIL_OAUTH_CLIENT_SECRET` | `gmail-oauth-client-secret` | 同上 | 同上 |
 | `GMAIL_OAUTH_REFRESH_TOKEN` | `gmail-oauth-refresh-token` | 同上（`scripts/gmail_oauth_setup.py` で取得） | 同上 |
@@ -41,6 +41,8 @@
 | `TZ` | `Asia/Tokyo` | タイムゾーン |
 | `ROLE` | （なし） | `admin` にすると管理サービスとして動く。IAP の付けるログイン情報を信用するのはこのときだけ。**公開サービスには設定しない** |
 | `PUBLIC_BASE_URL` | （`PUBSUB_PUSH_AUDIENCE` から求める） | 公開サービスの URL。LINE で送るリンク（出典ファイルなど）に使う |
+| `PUBLIC_ADMIN_API` | （なし・閉じる） | `on` にすると公開サービスでも `/admin`・`/api` を `X-Admin-Token` で使える。既定は閉じる。移行や緊急時だけ |
+| `IAP_AUDIENCE` | （Cloud Run の情報から求める） | 管理サービスで、IAP の署名を確かめるときの宛先（`/projects/<番号>/locations/<リージョン>/services/<サービス名>`）。ふつうは設定しない。自動で求められない環境でだけ設定する |
 
 ### LOM の情報
 
@@ -49,16 +51,24 @@ LOM ごとに変わる名前・URL です。コードには直書きしません
 
 | 名前 | 既定値 | 説明 |
 |---|---|---|
-| `LOM_ID` | `lom` | データに付ける LOM の識別子（英数字。例: `inawashiro`） |
-| `LOM_NAME` | `青年会議所` | LOM の名前（例: `猪苗代青年会議所`）。AI への指示・画面の文言に使う |
-| `LOM_SHORT_NAME` | （`LOM_NAME`） | 短い呼び名（例: `猪苗代JC`） |
-| `BOT_NAME` | `専務AI` | LINE 公式アカウントの名前（例: `猪苗代専務AI`）。LINE の文面・LIFF・管理画面に出る |
+| `LOM_ID` | `lom` | データに付ける LOM の識別子（英数字。例: `yourlom`） |
+| `LOM_NAME` | `青年会議所` | LOM の名前（例: `○○青年会議所`）。AI への指示・画面の文言に使う |
+| `LOM_SHORT_NAME` | （`LOM_NAME`） | 短い呼び名（例: `○○JC`） |
+| `BOT_NAME` | `専務AI` | LINE 公式アカウントの名前（例: `○○専務AI`）。LINE の文面・LIFF・管理画面に出る |
 | `LINE_BASIC_ID` | （なし） | LINE 公式アカウントのベーシック ID（例: `@abc1234`）。友だち追加のリンクに使う |
 | `ADMIN_BASE_URL` | （なし） | 管理画面の URL（例: `https://admin.example.org`）。LINE のメニューの「管理画面を開く」などに使う |
 | `LOM_GOOGLE_ACCOUNT` | （なし） | LOM 公式の Google アカウント（カレンダー・ドライブ・Gmail の持ち主） |
 
-サービスアカウント（`drive-reader`・`calendar-sync`・`doc-editor`）のメールアドレスは、`GCP_PROJECT_ID` から
-`<名前>@<プロジェクト ID>.iam.gserviceaccount.com` として求めます。
+### サービスアカウント（権限借用の相手）
+
+Google Workspace を読み書きするとき、実行用の `app-runtime` が権限を借りるサービスアカウントです（[setup.md](setup.md) §1-3）。
+未設定なら `GCP_PROJECT_ID` から `<名前>@<プロジェクト ID>.iam.gserviceaccount.com` として求めます。名前を変えたときだけ設定します。
+
+| 名前 | 既定値 | 説明 |
+|---|---|---|
+| `DRIVE_READER_SA` | `drive-reader@<プロジェクト ID>.iam.gserviceaccount.com` | ドライブの資料・Google フォームを読む（`scripts/setup_drive_reader.sh` が作る） |
+| `GCAL_SYNC_SA` | `calendar-sync@<プロジェクト ID>.iam.gserviceaccount.com` | Google カレンダーと同期する（`scripts/setup_calendar_sync.sh` が作る）。LOM 公式アカウントの OAuth があればそちらを使う |
+| `DOC_EDITOR_SA` | `doc-editor@<プロジェクト ID>.iam.gserviceaccount.com` | 委員会資料・議案書を読み書きする（`scripts/setup_doc_editor.sh` が作る） |
 
 ### AI（Vertex AI）
 
@@ -66,6 +76,8 @@ LOM ごとに変わる名前・URL です。コードには直書きしません
 |---|---|---|
 | `VERTEX_AI_LOCATION` | `asia-northeast1` | Vertex AI のリージョン |
 | `GEMINI_MODEL` | `gemini-2.5-pro` | タスク別のモデル表（[app/llm.py](../app/llm.py) の `TASK_MODELS`）に無いタスクで使うモデル |
+| `GEMINI_MODEL_<タスク>` | （なし） | タスクごとのモデルの上書き。`<タスク>` は `TASK_MODELS` のキーを大文字にしたもの（例: `GEMINI_MODEL_MEMBER_QA`） |
+| `GEMINI_THINKING_<タスク>` | （なし） | タスクごとの「考える量」（thinking budget）の上書き。数値（例: `GEMINI_THINKING_DOC_EDIT=512`） |
 | `LLM_PRICE_INPUT_USD_PER_1M` | （モデル別の既定単価） | 管理画面の「当月コスト」の概算に使う入力単価（USD / 100 万トークン） |
 | `LLM_PRICE_OUTPUT_USD_PER_1M` | （同上） | 同、出力単価 |
 | `INFRA_MONTHLY_USD` | `0` | 同、Cloud Run などの固定費の月額概算（USD） |
@@ -97,10 +109,20 @@ LOM ごとに変わる名前・URL です。コードには直書きしません
 |---|---|---|
 | `GCAL_CALENDAR_ID` | （なし） | 連携する Google カレンダーの ID。未設定ならカレンダー連携は無効 |
 | `DRIVE_KNOWLEDGE_FOLDERS` | （なし） | 検索の対象にするドライブのフォルダ ID（カンマ区切り）。未設定ならドライブ取込は無効 |
+| `DRIVE_EXCLUDE_WORDS` | （なし） | ドライブ取込で除外する語を足す（カンマ区切り。例: `連絡先,緊急連絡網`）。フォルダ名・ファイル名にこの語を含むものは取り込まない。既定の語（`名簿`・`住所録`・`入会`・`認承証`・`個人情報`・`事務局`）は外せない。**名前で除外しているだけ**なので、個人情報の資料は共有フォルダに置かないか、名前に除外する語を入れる（[setup.md](setup.md#6-1-ドライブの資料を読ませる)） |
 | `COMMITTEE_DOCS_FOLDER` | （なし） | 委員会資料のフォルダ ID。LINE から資料を編集する機能に使う |
 | `PLAN_TEMPLATE_DOC` | （なし） | 議案書の雛形にする Google ドキュメントの ID |
 | `DOC_FONT` | `Arial` | 議案書のフォント。形式チェックで、これ以外のフォントの文字をそろえる |
 | `GMAIL_LABEL` | `対外連絡` | 対外連絡として取り込む Gmail のラベル |
+
+### 議事録（`scripts/setup_minutes.sh`）
+
+会議の録画から議事録の下書きを作る機能です。どちらも `scripts/setup_minutes.sh` が両方のサービスに設定します。
+
+| 名前 | 既定値 | 説明 |
+|---|---|---|
+| `MINUTES_BUCKET` | （なし） | 録画を一時的に置く Cloud Storage のバケット（7 日で自動削除。作業が終われば、その場で消す）。未設定なら議事録は無効 |
+| `MINUTES_TOPIC` | （なし） | 議事録の作業を進める Pub/Sub トピック（名前か `projects/<ID>/topics/<名前>`）。未設定なら議事録は無効 |
 
 ### 手元の開発用
 
@@ -117,7 +139,7 @@ LOM ごとに変わる名前・URL です。コードには直書きしません
 | 項目 | 説明 |
 |---|---|
 | `kill_switch` | `true` で LINE への自動送信をすべて止める（[runbook.md](runbook.md) §4） |
-| `quiet_hours` | 送らない時間帯（既定 21:00〜8:00） |
+| `quiet_hours` | 送らない時間帯（既定 21:00〜8:00）。`enabled: false` で使わない（夜間も送る LOM 向け。管理画面「設定」のチェックで切り替える） |
 | `rate_limit` | 1 人あたり・全体の送信数の上限 |
 | `operation_start` | 運用開始日（年度の始まり）。これより前の予定は管理画面の一覧に既定で出さず、カレンダーからも取り込まない |
 | `rich_menus` | 立場ごとのリッチメニュー ID（`scripts/setup_rich_menu.py --create` が保存） |

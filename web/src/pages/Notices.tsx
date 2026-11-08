@@ -423,7 +423,7 @@ function ManualImport({ onCreated }: { onCreated: (n: Notice) => void }) {
             <input className="w-full" value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} />
           </Field>
           <Field label="差出人（任意）">
-            <input className="w-full" placeholder="例: 福島ブロック協議会" value={form.from_name} onChange={(e) => setForm({ ...form, from_name: e.target.value })} />
+            <input className="w-full" placeholder="例: ○○ブロック協議会" value={form.from_name} onChange={(e) => setForm({ ...form, from_name: e.target.value })} />
           </Field>
         </div>
         <Field label="本文" hint="メールの本文をそのまま貼り付けてください。原文として保存されます。同じ内容を2回貼り付けても重複しません。">

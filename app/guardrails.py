@@ -20,6 +20,8 @@ def _parse_hhmm(s: str) -> time:
 
 
 def is_quiet_hours(now: datetime, settings: Settings) -> bool:
+    if not settings.quiet_hours.enabled:
+        return False
     start = _parse_hhmm(settings.quiet_hours.start)
     end = _parse_hhmm(settings.quiet_hours.end)
     t = now.time()

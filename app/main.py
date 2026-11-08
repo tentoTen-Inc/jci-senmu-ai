@@ -57,7 +57,9 @@ from . import (
     line_push,
     line_worker,
     lom,
+    minutes,
     proposal_format,
+    proposal_return,
     proposal_submit,
     proposal_sync,
     rich_menu_link,
@@ -82,6 +84,7 @@ from .link_api import public_router as liff_link_router
 from .link_api import router as link_router
 from .logging_setup import configure_logging
 from .member_menu import build_menu, handle_member_text
+from .minutes_api import router as minutes_router
 from .notice_actions import ACTION_NOTICE_DONE, handle_done_postback
 from .notice_templates_api import router as notice_templates_router
 from .notices_api import router as notices_router
@@ -100,10 +103,14 @@ from .surveys_api import router as surveys_router
 configure_logging()
 logger = logging.getLogger("jci-agent")
 
-app = FastAPI(title="JCI SED Agent", version="0.1.0")
+# API の説明ページ（/docs・/openapi.json）は出さない。公開サービスで経路の一覧を見せない
+app = FastAPI(title="JCI SED Agent", version="0.1.0",
+              docs_url=None, redoc_url=None, openapi_url=None)
 
 # /admin・/api・/tasks は非公開。/line/webhook(署名検証)・/・/health のみ公開。
 PROTECTED_PREFIXES = ("/admin", "/api", "/tasks")
+#: 管理サービス（IAP）でだけ開くパス。公開サービスでは、あること自体を見せない（404）
+ADMIN_SERVICE_PREFIXES = ("/admin", "/api")
 
 
 def _is_authorized(request: Request) -> bool:
@@ -132,6 +139,9 @@ def _set_header(request: Request, name: str, value: str) -> None:
 @app.middleware("http")
 async def access_guard(request: Request, call_next):
     path = request.url.path
+    if (path.startswith(ADMIN_SERVICE_PREFIXES) and not config.behind_iap()
+            and not config.public_admin_api()):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
     if path.startswith(PROTECTED_PREFIXES) and not _is_authorized(request):
         return JSONResponse(status_code=401, content={"detail": "unauthorized"})
     return await call_next(request)
@@ -172,6 +182,7 @@ app.include_router(lake_router, prefix="/api")  # LINEグループ（データ�
 app.include_router(polls_router, prefix="/api")  # 日程調整（管理）
 app.include_router(notice_templates_router, prefix="/api")  # 通知テンプレート・会議の配信物
 app.include_router(feedback_router, prefix="/api")  # 意見箱（管理）
+app.include_router(minutes_router, prefix="/api")  # 会議の議事録（管理）
 app.include_router(liff_router)  # 日程調整の LIFF 画面（公開・LINE ログインで本人確認）
 app.include_router(liff_menu_router)  # メニューの LIFF 画面（予定と出欠など。公開・IDトークン）
 app.include_router(link_router, prefix="/api")  # LINE 連携の申請・予約投稿（管理）
@@ -523,7 +534,8 @@ def _tick_gmail_import(repo, now: datetime) -> dict | None:
 def tasks_tick():
     """Cloud Scheduler から定期起動。締切到来ステージの催促を発火する。
 
-    ※ Cloud Run の IAM 認証（Scheduler の OIDC 呼び出し）で保護する前提。公開しない。
+    ※ /tasks/* はヘッダ X-Admin-Token（Secret Manager の admin-api-secret）で保護する（上の
+    ミドルウェア）。Cloud Scheduler はこのヘッダを付けて呼ぶ。
     """
     repo = get_repo()
     now = datetime.now()
@@ -586,6 +598,8 @@ def tasks_tick():
         proposal_notice_result = proposal_submit.process(repo, now)
         # 体裁を直したことの委員長への知らせ（静音時間で送れなかった分）
         proposal_notice_result["format_fixes"] = proposal_format.send_pending(repo, now)
+        # 専務の差し戻しの知らせ（静音時間などで送れなかった分）
+        proposal_notice_result["returns"] = proposal_return.send_pending(repo, now)
     except Exception:  # noqa: BLE001 - tick 本体を止めない
         logger.exception("議案の知らせに失敗しました")
         proposal_notice_result = {"error": "proposal_notice_failed"}
@@ -613,14 +627,25 @@ def open_line_file(token: str):
                         media_type="text/plain; charset=utf-8")
     raw, content_type = lake_api_module._gcs_download(f"gs://{line_worker.bucket()}/{name}")
     filename = name.rsplit("/", 1)[-1]
-    return Response(
-        content=raw, media_type=content_type,
-        headers={
-            # LINE のアプリ内ブラウザでそのまま表示できるよう inline
-            "Content-Disposition": f"inline; filename*=UTF-8''{urllib.parse.quote(filename)}",
-            "Cache-Control": "private, no-store",
-        },
-    )
+    # PDF と画像だけ、LINE のアプリ内ブラウザでそのまま表示する（inline）。ほかの形式（HTML・SVG
+    # など）は、このドメインでスクリプトが動かないよう、中身を解釈させずにダウンロードさせる
+    inline = (content_type or "").lower() in INLINE_FILE_TYPES
+    headers = {
+        "Content-Disposition": f"{'inline' if inline else 'attachment'}; "
+                               f"filename*=UTF-8''{urllib.parse.quote(filename)}",
+        "Cache-Control": "private, no-store",
+    }
+    if not inline:
+        # 万一ブラウザが中身を解釈しても、スクリプトを動かさない（PDF に付けると表示が壊れるので
+        # ダウンロードさせる形式だけに付ける）
+        headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+    return Response(content=raw, media_type=content_type if inline else "application/octet-stream",
+                    headers=headers)
+
+
+#: 出典リンクでそのまま表示する形式（SVG は中にスクリプトを書けるので含めない）
+INLINE_FILE_TYPES = frozenset({"application/pdf", "image/jpeg", "image/png", "image/gif",
+                               "image/webp"})
 
 
 @app.post("/pubsub/line-worker")
@@ -647,6 +672,28 @@ async def pubsub_line_worker(request: Request):
         logger.exception("ワーカー処理に失敗（再送待ち）: id=%s", env.get("id"))
         return Response(status_code=500)
     logger.info("lake worker: id=%s result=%s", env.get("id"), result)
+    return Response(status_code=204)
+
+
+@app.post("/pubsub/minutes")
+async def pubsub_minutes(request: Request):
+    """議事録の作業を1段進める（Pub/Sub Push `minutes-jobs`。docs/meeting-minutes-design.md §5.8）。
+
+    認証は /pubsub/line-worker と同じ OIDC。失敗のやり直しは作業の記録（attempts）で行うので、
+    ここでは再送させない（同じ段を二重に進めない）。
+    """
+    if not minutes.is_configured():
+        return Response(status_code=503)
+    if not line_worker.verify_push(request.headers.get("Authorization")):
+        return Response(status_code=401)
+    try:
+        env = line_worker.decode_push(await request.json())
+        payload = env["payload"]
+    except Exception:  # noqa: BLE001 - 壊れたメッセージは再送しても直らない
+        logger.exception("議事録の作業の知らせを解釈できません（破棄）")
+        return Response(status_code=204)
+    result = await run_in_threadpool(minutes.handle, get_repo(), payload, datetime.now())
+    logger.info("minutes worker: %s result=%s", payload.get("event_id"), result)
     return Response(status_code=204)
 
 

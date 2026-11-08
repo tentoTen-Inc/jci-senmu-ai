@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """立場ごとのリッチメニューを生成して LINE に登録する（docs/liff-menu-design.md §2）。
 
-使い方（リポジトリ直下・direnv 有効な状態で）:
+使い方（リポジトリ直下。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で
+  例: set -a; source .env; set +a）:
   python scripts/setup_rich_menu.py --image-only out_dir/   # 画像の生成のみ（4種類）
   python scripts/setup_rich_menu.py --create [--liff-id ID]
       # 会員・理事・五役（みんな／運営のタブ2枚）を作成し、タブのエイリアスを張り、

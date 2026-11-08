@@ -69,7 +69,7 @@ class EventType(StrEnum):
     委員会 = "委員会"
     総会 = "総会"
     行事 = "行事"  # 旧「イベント」（カレンダーの【イベント】も行事として読む）
-    対外 = "対外"  # 福島ブロック・他LOM など外部の会議
+    対外 = "対外"  # ブロック協議会・他LOM など外部の会議
     個別 = "個別"  # 個人の打合せ等（カレンダーからは取り込まない）
 
     @classmethod
@@ -136,6 +136,30 @@ class Contact(BaseModel):
     fax: str | None = None
 
 
+class MemberProfile(BaseModel):
+    """日本JCの会員名簿（在籍会員一覧表）の項目。本部への申請などに使う。
+
+    連絡先（携帯・メール・住所・勤務先）は `Contact` に入れ、ここには名簿にしかない項目を置く。
+    取込は `app/member_profile_import.py`。年齢は生年月日から出すので持たない。
+    """
+
+    member_no: str | None = None  # LOM-会員No（例 "0647-00001"）
+    joined_on: str | None = None  # 入会年月日（YYYY-MM-DD）
+    gender: str | None = None  # 性別（名簿の表記: 男 | 女）
+    home_fax: str | None = None
+    work_postal_code: str | None = None
+    work_address: str | None = None
+    company_form: str | None = None  # 企業形態（例 "1:株式会社"）
+    industry_code: str | None = None  # 業種コード（例 "0401"）
+    industry: str | None = None  # 業種（例 "木造建築業"）
+    industry_section: str | None = None  # 業種別部会
+    education: str | None = None  # 最終学歴の区分（例 "大学卒業"）
+    school: str | None = None  # 最終学歴の学校名
+    blood_type: str | None = None  # 血液型（例 "A型"）
+    mail_to: str | None = None  # 送付先（名簿の表記: 自宅 | 事務局 など）
+    as_of: str | None = None  # 名簿の日付（YYYY-MM-DD）
+
+
 class Secondment(BaseModel):
     org: str
     role: str
@@ -167,7 +191,9 @@ class Member(BaseModel):
     lom_id: str = Field(default_factory=_default_lom_id)
     name: str
     kana: str | None = None
-    birthday: str | None = None  # 生年月日（和暦表記をそのまま保持: 例 "H3.11.15"）
+    #: 生年月日。日本JCの名簿からは YYYY-MM-DD。
+    #: 古い名簿（xlsx）からの値は和暦の表記のまま（例 "H3.11.15"）
+    birthday: str | None = None
     member_type: MemberType = MemberType.regular
     status: MemberStatus = MemberStatus.active
     committee: str | None = None  # 主たる所属（既存の画面・CSV との互換用）
@@ -178,8 +204,13 @@ class Member(BaseModel):
     supervised_committees: list[str] = Field(default_factory=list)
     secondments: list[Secondment] = Field(default_factory=list)
     contact: Contact = Field(default_factory=Contact)
+    #: 日本JCの会員名簿の項目（会員番号・入会日・勤務先の住所・業種・学歴など）
+    profile: MemberProfile = Field(default_factory=MemberProfile)
     line_user_id: str | None = None
     linked_at: datetime | None = None
+    #: 会議で呼ばれる名前（名前の一部・あだ名）。議事録の話者の判定に使う
+    #: （docs/meeting-minutes-design.md §5.1）。会員の取込・名簿の同期では上書きしない
+    nicknames: list[str] = Field(default_factory=list)
 
     @property
     def committee_names(self) -> set[str]:
@@ -256,6 +287,9 @@ class LineGroup(BaseModel):
     joined_at: datetime | None = None
     left_at: datetime | None = None
     profile_at: datetime | None = None  # 最後にグループ名を取得した時刻
+    # 連携済みの会員の発言を初めて見た時刻。これがあるグループだけを LOM のグループとして扱う
+    # （連携の申請画面を開ける人の判定）。知らない人がボットを招いたグループを信用しない
+    member_seen_at: datetime | None = None
 
 
 class CalendarSyncState(BaseModel):
@@ -400,6 +434,10 @@ class ReminderPolicy(BaseModel):
 
 
 class QuietHours(BaseModel):
+    """送らない時間帯。LOM によって夜間も送る方針もあるので、使うかどうかを選べる。"""
+
+    #: false なら夜間も送る（時刻は残しておき、また使うときに戻せる）
+    enabled: bool = True
     start: str = "21:00"
     end: str = "08:00"
     tz: str = "Asia/Tokyo"
@@ -437,6 +475,20 @@ class EmailStyle(BaseModel):
     font_size: int = 11  # pt
 
 
+class MinutesSetting(BaseModel):
+    """議事録の設定（docs/meeting-minutes-design.md §9）。"""
+
+    #: 書き起こしの後に、わからない所を録画の画面で確かめるか。費用が書き起こしと同じくらい
+    #: かかるので既定は行わない（わからない所は「不明点」に残し、人が直す）
+    verify_screen: bool = False
+    #: 画面で確かめる箇所の上限（1回の会議）。超えたぶんは「不明点」に残す
+    verify_limit: int = 40
+    #: 用語集（委員会名・行事名・地名など）。台帳の委員会・会議は自動で足す
+    glossary: list[str] = Field(default_factory=list)
+    #: 議事録のドキュメントの置き場所（LOM のドライブのフォルダID）。空なら録画と同じフォルダ
+    folder_id: str | None = None
+
+
 class Settings(BaseModel):
     kill_switch: bool = False
     quiet_hours: QuietHours = Field(default_factory=QuietHours)
@@ -456,6 +508,8 @@ class Settings(BaseModel):
     doc_number: DocNumberSetting = Field(default_factory=lambda: DocNumberSetting())
     #: 案内メールの文字（§4.3）
     email_style: EmailStyle = Field(default_factory=lambda: EmailStyle())
+    #: 議事録（docs/meeting-minutes-design.md §9）
+    minutes: MinutesSetting = Field(default_factory=lambda: MinutesSetting())
 
 
 class DeliveryJob(BaseModel):
@@ -820,7 +874,8 @@ class Proposal(BaseModel):
     #: 提出締切を設定・変更した時刻。これより前に過ぎていた締切では未提出の知らせを送らない
     submit_deadline_set_at: datetime | None = None
     submit_plans: list[SubmitPlan] = Field(default_factory=list)  # 提出予定日（新しいものが最後）
-    alerts: list[ProposalAlert] = Field(default_factory=list)  # 担当副理事長への未提出の知らせ
+    #: 担当副理事長への未提出の知らせと、差し戻しの知らせ（key が "returned:" で始まる）
+    alerts: list[ProposalAlert] = Field(default_factory=list)
     # --- 資料フォルダ（storage_uri）から読んだ内容（作業文書を持たない予算書など） ---
     sources: list[ProposalSource] = Field(default_factory=list)
     source_error: str | None = None  # 読めなかった理由
@@ -1058,3 +1113,131 @@ class MeetingDispatch(BaseModel):
     history: list[LineDispatch] = Field(default_factory=list)  # 送った LINE（新しいものが最後）
     updated_at: datetime | None = None
     updated_by: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# 会議の議事録（docs/meeting-minutes-design.md）
+# --------------------------------------------------------------------------- #
+class MinutesStatus(StrEnum):
+    queued = "queued"  # 作業を受け付けた
+    copying = "copying"  # 録画を一時置き場に写している
+    transcribing = "transcribing"  # 一次の読み取り（30分ずつ）
+    verifying = "verifying"  # 画面での確認
+    drafting = "drafting"  # まとめ
+    ready = "ready"  # 案あり（人の確認待ち）
+    failed = "failed"  # 3回失敗して止めた
+
+
+class MinutesSegment(BaseModel):
+    """書き起こしの一区切り（§5.3）。時刻は録画の頭からの "HH:MM:SS"。"""
+
+    start: str
+    end: str | None = None
+    speaker: str | None = None  # 会員ID。わからなければ None（名前を推測で書かない）
+    speaker_by: str | None = None  # voice | called | screen | human
+    text: str = ""
+    proposal: str | None = None  # 議案ID
+    screen: str | None = None  # 画面に映っていたもの（資料名・行など）
+    evidence: str | None = None  # 画面で確かめて直したときの根拠
+
+
+class MinutesUnclear(BaseModel):
+    """音声だけではわからなかった所（§5.3〜5.4）。"""
+
+    unclear_id: str
+    at: str
+    kind: str = "speaker"  # speaker | screen | word | gap（区切りを書き起こせなかった）
+    question: str = ""
+    context: str = ""
+    status: str = "open"  # open | verified（画面で確かめた）| resolved（人が直した）| skipped
+    answer: str | None = None
+    evidence: str | None = None
+
+
+class MinutesOpinion(BaseModel):
+    by: str | None = None  # 会員ID
+    target: str | None = None  # 意見の箇所
+    point: str = ""
+    response: str | None = None
+    response_by: str | None = None
+
+
+class MinutesActionItem(BaseModel):
+    owner: str | None = None  # 会員ID
+    what: str = ""
+    due: str | None = None  # 「次の理事会まで」など
+
+
+class MinutesSection(BaseModel):
+    """議案（または議題）ごとのまとめ（§5.5）。"""
+
+    proposal: str | None = None
+    title: str = ""
+    explained: list[str] = Field(default_factory=list)
+    opinions: list[MinutesOpinion] = Field(default_factory=list)
+    decided: list[str] = Field(default_factory=list)
+    action_items: list[MinutesActionItem] = Field(default_factory=list)
+    for_absent: str | None = None
+
+
+class MinutesSensitive(BaseModel):
+    """内々の話（人事・入会候補・個人の事情など）。既定でグループ向けに入れない。"""
+
+    sensitive_id: str
+    at: str | None = None
+    kind: str = "private"  # personnel | candidate | private | money
+    summary: str = ""
+    include: bool = False
+
+
+class MinutesSend(BaseModel):
+    """議事録を送った記録。"""
+
+    kind: str = "group"  # group（会議体の要点）| committee（委員会向け）
+    channel: str = "group"  # group（LINE グループ）| user（個別の LINE）
+    to_id: str | None = None
+    to_name: str | None = None
+    committee: str | None = None
+    text: str = ""
+    sent_at: datetime | None = None
+    sent_by: str | None = None
+
+
+class CommitteeMinutes(BaseModel):
+    """委員会向けの議事録（その委員会に関わる所だけ）。"""
+
+    committee: str
+    text: str = ""
+    created_at: datetime | None = None
+
+
+class MeetingMinutes(BaseModel):
+    """会議の議事録の作業と案（§8）。"""
+
+    event_id: str
+    status: MinutesStatus = MinutesStatus.queued
+    #: 作業の版。やり直すと新しくなり、古い版の作業の知らせは捨てる
+    run_id: str = ""
+    #: 作業の段の通し番号。同じ段を二重に進めない
+    seq: int = 0
+    recording_file_id: str | None = None
+    recording_name: str | None = None
+    recording_folder_id: str | None = None
+    source: str = "meet_recording"  # meet_recording | meet_transcript | upload
+    gcs_uri: str | None = None
+    duration_sec: int | None = None
+    chunk: int = 0  # 一次の読み取りで次に読む区切り（0 始まり）
+    segments: list[MinutesSegment] = Field(default_factory=list)
+    unclear: list[MinutesUnclear] = Field(default_factory=list)
+    sections: list[MinutesSection] = Field(default_factory=list)
+    confirmations: list[str] = Field(default_factory=list)
+    sensitive: list[MinutesSensitive] = Field(default_factory=list)
+    committees: list[CommitteeMinutes] = Field(default_factory=list)
+    doc_id: str | None = None
+    sends: list[MinutesSend] = Field(default_factory=list)
+    attempts: int = 0
+    error: str | None = None
+    requested_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    edited_by: str | None = None

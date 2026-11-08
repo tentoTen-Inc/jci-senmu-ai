@@ -1,5 +1,7 @@
 """2027年度への切り替え（組織図の取込・兼務・青年賛助会員・運用開始日）のテスト。"""
+import json
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -100,6 +102,22 @@ def test_duplicate_names_rejected():
 
 def test_name_key_ignores_spaces():
     assert name_key("青木　健太") == name_key("青木 健太") == name_key("青木健太")
+
+
+def test_org_sample_json_loads_through_importer():
+    """docs/samples/org.sample.json（組織図の見本）が取込の形式どおりであること。"""
+    path = Path(__file__).resolve().parent.parent / "docs" / "samples" / "org.sample.json"
+    entries = _entries(*json.loads(path.read_text(encoding="utf-8")))
+    changes = plan([], entries)
+    assert changes and all(c.action == "create" for c in changes)
+    by_name = {c.member.name: c.member for c in changes}
+    assert by_name["佐藤 次郎"].supervised_committees == ["総務委員会", "まちづくり委員会"]
+    assert by_name["佐藤 次郎"].committee is None  # 担当の委員会は所属ではない
+    assert by_name["伊藤 五郎"].committee == "まちづくり委員会"  # 先頭が主たる所属
+    assert by_name["伊藤 五郎"].committee_role == "委員長"
+    assert len(by_name["伊藤 五郎"].committees) == 2
+    assert by_name["小林 七海"].member_type == MemberType.youth_support
+    assert by_name["中村 八重"].member_type == MemberType.office
 
 
 # --------------------------------------------------------------------------- #

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../api/client";
 import { LinkRequests, type LinkData } from "../components/LinkRequests";
 import {
@@ -55,6 +55,9 @@ type MemberDetail = {
   status: string;
   contact: Contact;
   line_user_id: string | null;
+  nicknames?: string[];
+  birthday?: string | null;
+  profile?: Record<string, string | null>;
 };
 type History = {
   name: string;
@@ -369,7 +372,66 @@ function LinkSummary({
 }
 
 // ---------------------------------------------------------------- 会員の詳細（編集・出欠履歴・招待コード）
-type Tab = "edit" | "history" | "invite";
+type Tab = "edit" | "roster" | "history" | "invite";
+
+/** 年齢（満）。生年月日が YYYY-MM-DD のときだけ出す */
+function age(birthday: string | null | undefined): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(birthday ?? "");
+  if (!m) return null;
+  const now = new Date();
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  return now.getFullYear() - y - (now.getMonth() + 1 < mo || (now.getMonth() + 1 === mo && now.getDate() < d) ? 1 : 0);
+}
+
+/** 日本JCの会員名簿の項目（scripts/import_member_profiles.py で取り込む。ここでは見るだけ） */
+function RosterPanel({ m }: { m: MemberDetail }) {
+  const p = m.profile ?? {};
+  const c = m.contact;
+  const a = age(m.birthday);
+  const join = (...xs: (string | null | undefined)[]) => xs.filter(Boolean).join(" ") || null;
+  const groups: [string, [string, string | null | undefined][]][] = [
+    ["会員", [
+      ["会員番号", p.member_no], ["ふりがな", m.kana], ["入会日", p.joined_on],
+      ["生年月日", m.birthday && (a != null ? `${m.birthday}（${a}歳）` : m.birthday)],
+      ["性別", p.gender], ["血液型", p.blood_type], ["送付先", p.mail_to],
+    ]],
+    ["自宅", [
+      ["住所", join(c.postal_code && `〒${c.postal_code}`, c.home_address)],
+      ["電話", c.home_tel], ["FAX", p.home_fax], ["携帯電話", c.mobile], ["メール", c.email],
+    ]],
+    ["勤務先", [
+      ["勤務先", c.work], ["役職", c.work_title], ["企業形態", p.company_form],
+      ["業種", join(p.industry_code, p.industry)], ["業種別部会", p.industry_section],
+      ["住所", join(p.work_postal_code && `〒${p.work_postal_code}`, p.work_address)],
+      ["電話", c.work_tel], ["FAX", c.fax],
+    ]],
+    ["学歴", [["最終学歴", join(p.education, p.school)]]],
+  ];
+  return (
+    <Panel>
+      <div className="space-y-4 pt-3 text-sm">
+        {!p.member_no && <p className="text-ink-sub">日本JCの名簿はまだ取り込まれていません。</p>}
+        {groups.map(([title, rows]) => (
+          <div key={title}>
+            <div className="mb-1 text-xs font-bold text-ink-sub">{title}</div>
+            <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1">
+              {rows.map(([k, v]) => (
+                <Fragment key={k}>
+                  <dt className="text-ink-sub">{k}</dt>
+                  <dd className="break-all">{v || <span className="text-ink-faint">—</span>}</dd>
+                </Fragment>
+              ))}
+            </dl>
+          </div>
+        ))}
+        <p className="text-xs text-ink-faint">
+          個人情報です。本部への申請など、必要なときだけ使ってください。
+          {p.as_of && ` 名簿の日付: ${p.as_of}`}
+        </p>
+      </div>
+    </Panel>
+  );
+}
 
 function MemberDrawer({
   row,
@@ -388,6 +450,8 @@ function MemberDrawer({
   const { confirm, toast } = useUi();
   const [edit, setEdit] = useState<MemberDetail | null>(null);
   const [origStatus, setOrigStatus] = useState<string | null>(null);
+  // 会議で呼ばれる名前（「、」区切りで入れる。議事録の話者の判定に使う）
+  const [nick, setNick] = useState("");
   const [hist, setHist] = useState<History | null>(null);
   const [invite, setInvite] = useState<Invite | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -402,6 +466,7 @@ function MemberDrawer({
       .then((m) => {
         setEdit(m);
         setOrigStatus(m.status);
+        setNick((m.nicknames ?? []).join("、"));
       })
       .catch((e) => setErr((e as Error).message));
   }, [row.member_id]);
@@ -436,6 +501,7 @@ function MemberDrawer({
           member_type: edit.member_type,
           status: edit.status,
           contact: edit.contact,
+          nicknames: nick.split(/[、,，\s]+/).map((x) => x.trim()).filter(Boolean),
         }),
       });
       toast(`${edit.name} さんの情報を保存しました`);
@@ -488,6 +554,7 @@ function MemberDrawer({
         <Segmented value={tab} onChange={onTab}
           options={[
             { value: "edit", label: "情報の編集" },
+            { value: "roster", label: "名簿" },
             { value: "history", label: "出欠履歴" },
             { value: "invite", label: "招待コード" },
           ]} />
@@ -516,6 +583,9 @@ function MemberDrawer({
               </Field>
               <Field label="ふりがな">
                 <input className="w-full" value={edit.kana ?? ""} onChange={(e) => set({ kana: e.target.value || null })} />
+              </Field>
+              <Field label="呼び名" hint="会議で呼ばれる名前（「、」区切り）。議事録で誰が話したかを当てるのに使います">
+                <input className="w-full" placeholder="例: 〇〇くん、〇〇ちゃん" value={nick} onChange={(e) => setNick(e.target.value)} />
               </Field>
               <Field label="役職" hint="理事長・副理事長・専務理事・監事 など">
                 <input className="w-full" value={edit.officer_role ?? ""} onChange={(e) => set({ officer_role: e.target.value || null })} />
@@ -558,6 +628,8 @@ function MemberDrawer({
           </div>
         </Panel>
       ))}
+
+      {tab === "roster" && (!edit ? <Loading /> : <RosterPanel m={edit} />)}
 
       {tab === "history" && (!hist ? <Loading /> : (
         <Panel flush>

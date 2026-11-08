@@ -4,7 +4,8 @@
 データセットが無くても実行でき、読むのはリテラルだけなので課金も発生しない。
 ビューを追加・変更したら、セットアップ前にこれで構文と結果を確認する。
 
-使い方（リポジトリ直下・direnv 有効な状態で）:
+使い方（リポジトリ直下。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で
+  例: set -a; source .env; set +a）:
   .venv/bin/python scripts/check_lake_views.py v_messages          # SQL を表示
   .venv/bin/python scripts/check_lake_views.py v_messages --run    # bq で実行して結果を表示
 """
@@ -74,7 +75,7 @@ SAMPLES = [
                  "messages": [{"type": "text", "text": "出欠のご回答をお願いします"}]}},
     {"v": 1, "id": "ans_1", "kind": "ai_answer", "received_at": "2026-10-06T21:40:00.000+09:00",
      "payload": {"answer_id": "ans_1", "member_id": "sed", "user_id": "U1",
-                 "question": "福島ブロックの予定を教えて",
+                 "question": "ブロック協議会の予定を教えて",
                  "answer": "資料によると10月8日に引継ぎがあります[1]。",
                  "sources": [{"chunk_id": "file:m2:0", "title": "議案.pdf", "distance": 0.2}],
                  "grounded": True, "needs_human": False, "model": "gemini-2.5-pro",

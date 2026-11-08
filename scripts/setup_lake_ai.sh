@@ -5,7 +5,8 @@
 #   BigQuery ──(接続 vertex-ai)──► Vertex AI gemini-embedding-001
 #   line_lake.embedding_model（リモートモデル）でベクトル化し、line_lake.knowledge_chunks を VECTOR_SEARCH
 #
-# 前提: ./scripts/setup_datalake.sh 済み。gcloud / bq がオーナー相当で認証済み（direnv 有効な状態で実行）。
+# 前提: ./scripts/setup_datalake.sh 済み。gcloud / bq がオーナー相当で認証済み。
+#       必要な環境変数（GCP_PROJECT_ID など）を設定した状態で実行する。例: set -a; source .env; set +a
 # 使い方: ./scripts/setup_lake_ai.sh
 set -euo pipefail
 

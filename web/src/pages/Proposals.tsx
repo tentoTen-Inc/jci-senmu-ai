@@ -63,6 +63,8 @@ type Proposal = {
   meeting_poll_id?: string | null;
   blank_count?: number | null;
   submit_plan_label?: string | null; // 締切を過ぎた未提出の議案の提出予定日（担当副理事長が LINE で答えた）
+  // 差し戻しの知らせ（pending: 送らない時間帯などで、まだ送っていない）
+  return_notice?: { state: "pending" | "done"; sent: string[]; failed: string[] } | null;
 };
 const SUMMARY_TYPE = "年間計画（サマリー）";
 
@@ -184,6 +186,18 @@ function docUrl(uri: string | null): string | null {
 // ---------------------------------------------------------------- 画面
 
 const EMPTY_FORM = { title: "", committee: "", number: "", entry: "", submit: "", deliver: "", content: "" };
+
+/** 差し戻しの知らせの状況（送った人・届かなかった人） */
+function ReturnNotice({ n }: { n: NonNullable<Proposal["return_notice"]> }) {
+  if (n.state === "pending")
+    return <div className="mt-1 text-xs text-hold">知らせはまだ送っていません（送らない時間帯などのため、送れるようになったら送ります）。</div>;
+  return (
+    <div className="mt-1 text-xs text-ink-sub">
+      {n.sent.length > 0 ? <>LINE で知らせました: {n.sent.map((x) => `${x}さん`).join("、")}</> : n.failed.length === 0 && <>知らせる相手がいませんでした。</>}
+      {n.failed.length > 0 && <div className="text-danger">届きませんでした（直接ご連絡ください）: {n.failed.map((x) => `${x}さん`).join("、")}</div>}
+    </div>
+  );
+}
 
 export default function Proposals() {
   const { confirm, toast } = useUi();
@@ -569,8 +583,9 @@ function Detail({
       body: (
         <>
           差し戻すと「エントリー」の段階に戻ります（委員会が直して出し直します）。
-          {comment.trim() ? <>コメント「{comment.trim()}」を記録します。</> : <>直してほしい点をコメントに書いておくと記録に残ります。</>}
-          <br />※ 委員会への連絡は自動では送られません。
+          {comment.trim() ? <>コメント「{comment.trim()}」を記録し、知らせにも載せます。</> : <>直してほしい点をコメントに書いておくと、知らせにも載ります。</>}
+          <br />
+          提出した人・{p.committee ? `${p.committee}の委員長・担当副理事長` : "議案の担当者"}に LINE で知らせます。
         </>
       ),
       confirmLabel: "差し戻す",
@@ -677,6 +692,7 @@ function Detail({
               {p.sed_approval.at ? fmtDateTime(p.sed_approval.at) : ""} {actorLabel(p.sed_approval.by)}
             </div>
             {p.sed_approval.comment ? <div className="mt-0.5">{p.sed_approval.comment}</div> : <div className="mt-0.5 text-ink-faint">コメントなし</div>}
+            {p.sed_approval.status === "returned" && p.return_notice && <ReturnNotice n={p.return_notice} />}
           </div>
         )}
         <Field label="コメント（任意）" hint="差し戻すときは、直してほしい点を書いておくと記録に残ります。">
