@@ -67,27 +67,6 @@ _NOTICE_PROMPT = """あなたは青年会議所(JC)の専務理事を補佐す�
 """
 
 
-_INTENT_PROMPT = """会員のメッセージから、どのイベントの出欠をどう回答したいのかを推定してください。
-
-厳守事項:
-- event_id は「候補イベント」のIDから選ぶ。どれか判断できなければ null。
-- status は 出席 / Web出席 / 欠席 / 委任 のいずれか。判断できなければ null。
-- 推測が曖昧な場合や、出欠回答の意図が読み取れない場合は confident=false にする。
-
-出力JSON:
-- event_id: 対象イベントのID(または null)
-- status: 出欠(または null)
-- confident: 明確に読み取れたか(true/false)
-
-# 候補イベント
-{events}
-
-# 会員のメッセージ
-{text}
-
-# 出力(JSONのみ)
-"""
-
 _CALENDAR_PROMPT = """あなたは青年会議所(JC)の予定管理アシスタントです。
 役員のメッセージから、予定(例会・理事会など)を登録・変更・中止したいのかを読み取り、JSONで出力してください。
 
@@ -296,7 +275,6 @@ PRO = "gemini-2.5-pro"
 #: GEMINI_MODEL_<タスク名の大文字>（例: GEMINI_MODEL_MEMBER_QA=gemini-2.5-pro）で上書きする。
 TASK_MODELS: dict[str, str] = {
     "member_qa": FLASH,  # 会員の自由文の質問への回答（LINE で返事を待つ）
-    "attendance_intent": FLASH,  # 自然文からの出欠の読み取り（LINE で返事を待つ・単純な抽出）
     "calendar_intent": FLASH,  # 自然文からの予定操作の読み取り（LINE で返事を待つ）
     "proposal_review": PRO,  # 議案の内容レビュー（論点・矛盾の指摘。品質重視・非同期）
     "external_notice_digest": PRO,  # 対外連絡の要約と告知文（誤要約を避けたい・非同期）
@@ -324,7 +302,6 @@ TASK_MODELS: dict[str, str] = {
 #: （上限0で 1.8 秒・回答の質は同等。2026-10-12 計測）。会員とのやり取りは速さ優先で抑える。
 TASK_THINKING_BUDGET: dict[str, int | None] = {
     "member_qa": 0,  # 材料に書いてあることを答える。考えなくても質は同等だった
-    "attendance_intent": 0,  # 出欠の読み取りは単純な抽出
     "calendar_intent": 512,  # 「来週火曜」等の日付の計算があるので少しだけ考えさせる
     "doc_edit": 1024,  # 依頼と今の内容・参考資料を突き合わせて文章を組み立てる
 }
@@ -533,59 +510,6 @@ def digest_survey(texts: list[str]) -> SurveyDigestOutcome | None:
         return None
     return SurveyDigestOutcome(
         digest=digest,
-        usage=InferenceUsage(
-            model=model,
-            input_tokens=gen.input_tokens,
-            output_tokens=gen.output_tokens,
-        ),
-    )
-
-
-# --------------------------------------------------------------------------- #
-# 自然文からの出欠意図解釈（F4-7）
-# --------------------------------------------------------------------------- #
-class AttendanceIntent(BaseModel):
-    event_id: str | None = None
-    status: str | None = None  # 出席 | Web出席 | 欠席 | 委任
-    confident: bool = False
-
-
-class IntentOutcome(BaseModel):
-    intent: AttendanceIntent
-    usage: InferenceUsage
-
-
-def generate_attendance_intent(
-    text: str, events: str, *, model: str, project: str, location: str
-) -> Generation:
-    """出欠意図の解釈（テストでモックする境界）。"""
-    prompt = _INTENT_PROMPT.format(text=text, events=events)
-    return _call_gemini(
-        prompt, model=model, project=project, location=location,
-        thinking_budget=thinking_budget_for("attendance_intent"),
-    )
-
-
-def parse_attendance_intent(text: str, events: str) -> IntentOutcome | None:
-    """自然文から「どのイベントを・どの出欠で」回答したいかを推定する。失敗時は None。"""
-    if not text or not text.strip() or not events.strip():
-        return None
-    model, project, location = _target("attendance_intent")
-    try:
-        gen = generate_attendance_intent(
-            text, events, model=model, project=project, location=location
-        )
-        data = json.loads(gen.text)
-        intent = AttendanceIntent(
-            event_id=(str(data["event_id"]) if data.get("event_id") else None),
-            status=(str(data["status"]) if data.get("status") else None),
-            confident=bool(data.get("confident", False)),
-        )
-    except Exception:  # noqa: BLE001 - LLM未設定/失敗でも本処理は止めない
-        logger.exception("出欠意図の解釈に失敗しました")
-        return None
-    return IntentOutcome(
-        intent=intent,
         usage=InferenceUsage(
             model=model,
             input_tokens=gen.input_tokens,
