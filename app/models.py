@@ -287,6 +287,9 @@ class LineGroup(BaseModel):
     joined_at: datetime | None = None
     left_at: datetime | None = None
     profile_at: datetime | None = None  # 最後にグループ名を取得した時刻
+    # 連携済みの会員の発言を初めて見た時刻。これがあるグループだけを LOM のグループとして扱う
+    # （連携の申請画面を開ける人の判定）。知らない人がボットを招いたグループを信用しない
+    member_seen_at: datetime | None = None
 
 
 class CalendarSyncState(BaseModel):

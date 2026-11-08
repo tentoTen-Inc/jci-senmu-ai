@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app import lake, lake_maintenance, line_worker, main
 from app.deps import set_repo
+from app.models import Member
 from app.repository import InMemoryRepository
 
 client = TestClient(main.app)
@@ -65,11 +66,14 @@ class Fakes:
 @pytest.fixture
 def repo():
     r = InMemoryRepository()
+    r.upsert_member(Member(member_id="m2", name="会員 二郎", line_user_id="U2"))  # 送り主
     set_repo(r)
     line_worker._known_groups.clear()
+    line_worker._member_groups.clear()
     yield r
     set_repo(None)
     line_worker._known_groups.clear()
+    line_worker._member_groups.clear()
 
 
 @pytest.fixture
@@ -347,3 +351,22 @@ def test_redact_failure_does_not_raise(monkeypatch):
     monkeypatch.setattr(lake_maintenance, "_bq_query",
                         lambda sql: (_ for _ in ()).throw(RuntimeError("403")))
     assert lake_maintenance.redact_unsent() == {"error": "redact_failed"}
+
+
+def test_files_from_non_members_are_not_stored(repo, fakes):
+    """友だち追加しただけの人や、会員のいないグループのファイルは保存しない。"""
+    stranger = {"type": "user", "userId": "U_stranger"}
+    assert line_worker.handle_envelope(repo, _event(PDF_FILE, source=stranger), NOW) \
+        == "skipped_non_member"
+    assert fakes.content() == []
+
+
+def test_member_message_marks_group(repo, fakes):
+    line_worker.handle_envelope(repo, _event({"type": "text", "id": "t1", "text": "こんにちは"}),
+                                NOW)
+    assert repo.get_line_group("G1").member_seen_at == NOW
+    stranger = {"type": "group", "groupId": "G9", "userId": "U_stranger"}
+    line_worker.handle_envelope(repo, _event({"type": "text", "id": "t2", "text": "x"},
+                                             source=stranger), NOW)
+    assert (repo.get_line_group("G9") is None
+            or repo.get_line_group("G9").member_seen_at is None)
