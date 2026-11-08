@@ -4,7 +4,8 @@ Webhook は publish に失敗すると、封筒を `LINE_INGEST_FALLBACK {json}`
 （app/lake.py）。このスクリプトはその行を拾い、同じ封筒のまま publish し直す。
 封筒の id（webhookEventId）が同じなので、二重に入ってもビューで1件にまとまる。
 
-使い方（リポジトリ直下・direnv 有効な状態で）:
+使い方（リポジトリ直下。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で
+  例: set -a; source .env; set +a）:
   gcloud logging read \
     'resource.labels.service_name="jci-sed-agent" AND textPayload:"LINE_INGEST_FALLBACK"' \
     --project "$GCP_PROJECT_ID" --freshness=7d --format=json > fallback.json

@@ -9,7 +9,8 @@
 #
 # 前提: setup_datalake.sh 済み（トピック・Push 用 SA・ワーカー設定）、かつ /pubsub/line-reply を
 #       含むコードがデプロイ済み（main へのマージ後に実行する）。
-# 使い方: ./scripts/setup_line_reply.sh   （direnv 有効な状態で）
+# 使い方: ./scripts/setup_line_reply.sh
+#   （必要な環境変数（GCP_PROJECT_ID など）を設定した状態で。例: set -a; source .env; set +a）
 #         元に戻す: gcloud run services update jci-sed-agent --remove-env-vars LINE_ASYNC_REPLY
 set -euo pipefail
 

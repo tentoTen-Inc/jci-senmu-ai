@@ -3,13 +3,14 @@
 
 既定は確認だけ（何も書き込まない）。--apply で書き込む（docs/proposal-ledger-design.md §10）。
 
-使い方（リポジトリ直下・direnv 有効な状態で）:
+使い方（リポジトリ直下。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で
+  例: set -a; source .env; set +a）:
   .venv/bin/python scripts/set_summary_deadline.py --deadline 2027-01-31T23:59 --poll <日程調整ID>
       # 対象と変更点の確認。書き込むときは --apply を付ける
 
 - 対象: 台帳の open の議案のうち、種類が「年間計画（サマリー）」のもの（proposal_sync が作る）。
 - 提出締切と上程先（日程調整 ID。管理画面の日程調整の URL にある）は毎回指定する。
-- 認証は gcloud のログイン（案件ストア）のアクセストークンを使う。
+- 認証は gcloud auth login でログインしたアカウントのアクセストークンを使う。
 """
 from __future__ import annotations
 

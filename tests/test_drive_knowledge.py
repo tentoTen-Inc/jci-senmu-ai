@@ -54,6 +54,21 @@ def test_excludes_personal_info():
     assert not drive_knowledge.excluded("2027年度/04-委員会", "2027_summary_総務委員会")
 
 
+def test_exclude_words_can_be_added_per_lom(monkeypatch):
+    monkeypatch.setenv("DRIVE_EXCLUDE_WORDS", " 連絡先 ,緊急連絡網、, ")
+    assert drive_knowledge.excluded("2027年度/04-委員会", "委員会 連絡先一覧")
+    assert drive_knowledge.excluded("2027年度/緊急連絡網", "最新版")
+    # 既定の語は足しても外れない
+    assert drive_knowledge.excluded("2027年度", "2027会員名簿")
+    assert not drive_knowledge.excluded("2027年度/04-委員会", "2027_summary_総務委員会")
+    assert drive_knowledge.exclude_words()[-2:] == ["連絡先", "緊急連絡網"]
+
+
+def test_exclude_words_default_without_env(monkeypatch):
+    monkeypatch.delenv("DRIVE_EXCLUDE_WORDS", raising=False)
+    assert drive_knowledge.exclude_words() == list(drive_knowledge.EXCLUDE_WORDS)
+
+
 def test_access_and_scopes():
     assert drive_knowledge.access_for("2027年度/01-執行部") == "officers"
     assert drive_knowledge.access_for("2026年度/五役会/第1回") == "officers"

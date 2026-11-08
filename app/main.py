@@ -534,7 +534,8 @@ def _tick_gmail_import(repo, now: datetime) -> dict | None:
 def tasks_tick():
     """Cloud Scheduler から定期起動。締切到来ステージの催促を発火する。
 
-    ※ Cloud Run の IAM 認証（Scheduler の OIDC 呼び出し）で保護する前提。公開しない。
+    ※ /tasks/* はヘッダ X-Admin-Token（Secret Manager の admin-api-secret）で保護する（上の
+    ミドルウェア）。Cloud Scheduler はこのヘッダを付けて呼ぶ。
     """
     repo = get_repo()
     now = datetime.now()

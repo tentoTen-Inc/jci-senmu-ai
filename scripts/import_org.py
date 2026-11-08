@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """年度の組織図（JSON）を会員データに取り込む CLI（既定は確認だけ。--apply で書き込み）。
 
-使い方（リポジトリ直下・direnv 有効な状態で）:
+使い方（リポジトリ直下。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で
+  例: set -a; source .env; set +a）:
   .venv/bin/python scripts/import_org.py data/roster-2027.json                 # 変更点の確認
   .venv/bin/python scripts/import_org.py data/roster-2027.json --apply \\
       --operation-start 2027-01-01 --deactivate-missing                       # 書き込み
@@ -9,7 +10,7 @@
 - 既存の会員とは氏名で突き合わせ、member_id と LINE 連携を引き継ぐ（app/org_import.py）。
 - --operation-start: 運用開始日。これより前のイベントは一覧・集計・カレンダー取込の
   対象外になる（データは消さない）。
-- 認証は gcloud のログイン（案件ストア）のアクセストークンを使う（ADC の設定は不要）。
+- 認証は gcloud auth login でログインしたアカウントのアクセストークンを使う（ADC の設定は不要）。
 - 実データの JSON はリポジトリにコミットしない（data/ は .gitignore 済み）。
 """
 from __future__ import annotations
