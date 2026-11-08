@@ -75,7 +75,7 @@ SAMPLES = [
                  "messages": [{"type": "text", "text": "出欠のご回答をお願いします"}]}},
     {"v": 1, "id": "ans_1", "kind": "ai_answer", "received_at": "2026-10-06T21:40:00.000+09:00",
      "payload": {"answer_id": "ans_1", "member_id": "sed", "user_id": "U1",
-                 "question": "福島ブロックの予定を教えて",
+                 "question": "ブロック協議会の予定を教えて",
                  "answer": "資料によると10月8日に引継ぎがあります[1]。",
                  "sources": [{"chunk_id": "file:m2:0", "title": "議案.pdf", "distance": 0.2}],
                  "grounded": True, "needs_human": False, "model": "gemini-2.5-pro",

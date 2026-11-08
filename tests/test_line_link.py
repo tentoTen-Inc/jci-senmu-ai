@@ -25,7 +25,8 @@ def repo(monkeypatch):
                            line_user_id="U_sed"))
     r.upsert_member(Member(member_id="m7", name="杉山 茂樹", officer_role="監事"))
     r.upsert_member(Member(member_id="m14", name="中村 葵"))
-    r.save_line_group(LineGroup(group_id="Cgroup", group_name="【JCI猪苗代】"))
+    r.save_line_group(LineGroup(group_id="Cgroup", group_name="【JCI猪苗代】",
+                                member_seen_at=datetime(2026, 10, 1)))
     set_repo(r)
     monkeypatch.setenv("LIFF_ID", "2000000000-abcdEFGH")
     monkeypatch.setenv("LINE_LOGIN_CHANNEL_ID", "2000000000")
@@ -209,3 +210,18 @@ def test_scheduled_poll_decide_registers_event_and_notifies(repo, pushed, monkey
     assert event.datetime_start == datetime(2026, 11, 6, 19)
     (to, msgs), = pushed
     assert to == "Cgroup" and "【日程決定】" in msgs[0].text and "11月6日(金)" in msgs[0].text
+
+
+def test_group_without_members_does_not_open_the_list(repo, monkeypatch):
+    """知らない人がボットを自分のグループに招いても、会員の名前の一覧は見られない。"""
+    repo.save_line_group(LineGroup(group_id="Cevil", group_name="よそのグループ"))
+    monkeypatch.setattr(sp, "_is_group_member_raw", lambda g, u: g == "Cevil")
+    res = public.get("/liff/api/link", headers={"Authorization": "Bearer tok-x"})
+    assert res.status_code == 403
+
+
+def test_repeated_request_does_not_spam_sed(repo, pushed):
+    for _ in range(3):
+        res = public.post("/liff/api/link", headers=_auth("tok-a"), json={"member_id": "m7"})
+        assert res.json()["status"] == "pending"
+    assert len(pushed) == 1  # 専務への知らせは 1 回だけ

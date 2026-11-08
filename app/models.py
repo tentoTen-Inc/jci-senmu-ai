@@ -69,7 +69,7 @@ class EventType(StrEnum):
     委員会 = "委員会"
     総会 = "総会"
     行事 = "行事"  # 旧「イベント」（カレンダーの【イベント】も行事として読む）
-    対外 = "対外"  # 福島ブロック・他LOM など外部の会議
+    対外 = "対外"  # ブロック協議会・他LOM など外部の会議
     個別 = "個別"  # 個人の打合せ等（カレンダーからは取り込まない）
 
     @classmethod
@@ -287,6 +287,9 @@ class LineGroup(BaseModel):
     joined_at: datetime | None = None
     left_at: datetime | None = None
     profile_at: datetime | None = None  # 最後にグループ名を取得した時刻
+    # 連携済みの会員の発言を初めて見た時刻。これがあるグループだけを LOM のグループとして扱う
+    # （連携の申請画面を開ける人の判定）。知らない人がボットを招いたグループを信用しない
+    member_seen_at: datetime | None = None
 
 
 class CalendarSyncState(BaseModel):

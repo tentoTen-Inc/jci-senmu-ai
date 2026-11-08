@@ -103,10 +103,14 @@ from .surveys_api import router as surveys_router
 configure_logging()
 logger = logging.getLogger("jci-agent")
 
-app = FastAPI(title="JCI SED Agent", version="0.1.0")
+# API の説明ページ（/docs・/openapi.json）は出さない。公開サービスで経路の一覧を見せない
+app = FastAPI(title="JCI SED Agent", version="0.1.0",
+              docs_url=None, redoc_url=None, openapi_url=None)
 
 # /admin・/api・/tasks は非公開。/line/webhook(署名検証)・/・/health のみ公開。
 PROTECTED_PREFIXES = ("/admin", "/api", "/tasks")
+#: 管理サービス（IAP）でだけ開くパス。公開サービスでは、あること自体を見せない（404）
+ADMIN_SERVICE_PREFIXES = ("/admin", "/api")
 
 
 def _is_authorized(request: Request) -> bool:
@@ -135,6 +139,9 @@ def _set_header(request: Request, name: str, value: str) -> None:
 @app.middleware("http")
 async def access_guard(request: Request, call_next):
     path = request.url.path
+    if (path.startswith(ADMIN_SERVICE_PREFIXES) and not config.behind_iap()
+            and not config.public_admin_api()):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
     if path.startswith(PROTECTED_PREFIXES) and not _is_authorized(request):
         return JSONResponse(status_code=401, content={"detail": "unauthorized"})
     return await call_next(request)
@@ -620,14 +627,25 @@ def open_line_file(token: str):
                         media_type="text/plain; charset=utf-8")
     raw, content_type = lake_api_module._gcs_download(f"gs://{line_worker.bucket()}/{name}")
     filename = name.rsplit("/", 1)[-1]
-    return Response(
-        content=raw, media_type=content_type,
-        headers={
-            # LINE のアプリ内ブラウザでそのまま表示できるよう inline
-            "Content-Disposition": f"inline; filename*=UTF-8''{urllib.parse.quote(filename)}",
-            "Cache-Control": "private, no-store",
-        },
-    )
+    # PDF と画像だけ、LINE のアプリ内ブラウザでそのまま表示する（inline）。ほかの形式（HTML・SVG
+    # など）は、このドメインでスクリプトが動かないよう、中身を解釈させずにダウンロードさせる
+    inline = (content_type or "").lower() in INLINE_FILE_TYPES
+    headers = {
+        "Content-Disposition": f"{'inline' if inline else 'attachment'}; "
+                               f"filename*=UTF-8''{urllib.parse.quote(filename)}",
+        "Cache-Control": "private, no-store",
+    }
+    if not inline:
+        # 万一ブラウザが中身を解釈しても、スクリプトを動かさない（PDF に付けると表示が壊れるので
+        # ダウンロードさせる形式だけに付ける）
+        headers["Content-Security-Policy"] = "sandbox; default-src 'none'"
+    return Response(content=raw, media_type=content_type if inline else "application/octet-stream",
+                    headers=headers)
+
+
+#: 出典リンクでそのまま表示する形式（SVG は中にスクリプトを書けるので含めない）
+INLINE_FILE_TYPES = frozenset({"application/pdf", "image/jpeg", "image/png", "image/gif",
+                               "image/webp"})
 
 
 @app.post("/pubsub/line-worker")

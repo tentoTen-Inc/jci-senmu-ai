@@ -44,6 +44,8 @@ _EXT = {"image": ".jpg", "video": ".mp4", "audio": ".m4a"}
 
 #: プロセス内キャッシュ（グループID → 最後にグループ名を確認した時刻）。Firestore 読み取りを減らす
 _known_groups: dict[str, datetime] = {}
+#: 連携済みの会員の発言を記録済みのグループ（Firestore の読み書きを減らす）
+_member_groups: set[str] = set()
 
 
 class RetryLater(RuntimeError):
@@ -322,6 +324,30 @@ def track_group(repo: Repository, payload: dict, now: datetime) -> None:
     _known_groups[group_id] = now
 
 
+def _from_member(repo: Repository, payload: dict) -> bool:
+    """送った人が LINE 連携済みの会員か。"""
+    user_id = (payload.get("source") or {}).get("userId")
+    return bool(user_id and repo.get_member_by_line_user_id(user_id))
+
+
+def _unmarked_group(payload: dict) -> bool:
+    source = payload.get("source") or {}
+    return source.get("type") == "group" and source.get("groupId") not in _member_groups
+
+
+def mark_member_group(repo: Repository, payload: dict, now: datetime) -> None:
+    """会員が発言したグループに印を付ける（LineGroup.member_seen_at）。"""
+    source = payload.get("source") or {}
+    group_id = source.get("groupId")
+    if source.get("type") != "group" or not group_id or group_id in _member_groups:
+        return
+    group = repo.get_line_group(group_id) or LineGroup(group_id=group_id)
+    if group.member_seen_at is None:
+        group.member_seen_at = now
+        repo.save_line_group(group)
+    _member_groups.add(group_id)
+
+
 # --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
@@ -332,8 +358,15 @@ def handle_envelope(repo: Repository, env: dict, now: datetime) -> str:
     payload = env.get("payload") or {}
     track_group(repo, payload, now)
     event_type = payload.get("type")
-    if event_type == "message" and (payload.get("message") or {}).get("type") in MEDIA_TYPES:
-        return store_content(payload)
+    if event_type == "message":
+        media = (payload.get("message") or {}).get("type") in MEDIA_TYPES
+        from_member = _from_member(repo, payload) if media or _unmarked_group(payload) else None
+        if from_member:
+            mark_member_group(repo, payload, now)
+        if media:
+            # 会員でない人のファイルは保存しない（友だち追加しただけの人や、知らない人が
+            # ボットを招いたグループから、保存の費用を増やされないように）
+            return store_content(payload) if from_member else "skipped_non_member"
     if event_type == "unsend":
         return f"unsend:{delete_unsent(payload)}"
     return "noop"

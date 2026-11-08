@@ -5,11 +5,11 @@
 
 使い方（リポジトリ直下。必要な環境変数（GCP_PROJECT_ID など）を設定した状態で
   例: set -a; source .env; set +a）:
-  .venv/bin/python scripts/set_summary_deadline.py                       # 対象と変更点の確認
-  .venv/bin/python scripts/set_summary_deadline.py --apply               # 書き込み
+  .venv/bin/python scripts/set_summary_deadline.py --deadline 2027-01-31T23:59 --poll <日程調整ID>
+      # 対象と変更点の確認。書き込むときは --apply を付ける
 
 - 対象: 台帳の open の議案のうち、種類が「年間計画（サマリー）」のもの（proposal_sync が作る）。
-- 既定値: 提出締切 2026-10-31 23:59、上程先 = 日程調整 poll_08649098fc（第2回五役予定者会議）。
+- 提出締切と上程先（日程調整 ID。管理画面の日程調整の URL にある）は毎回指定する。
 - 認証は gcloud auth login でログインしたアカウントのアクセストークンを使う。
 """
 from __future__ import annotations
@@ -26,9 +26,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.proposal_sync import SUMMARY_TYPE  # noqa: E402
 
 PROJECT = os.environ.get("GCP_PROJECT_ID") or sys.exit("GCP_PROJECT_ID を設定してください")
-DEFAULT_DEADLINE = "2026-10-31T23:59"
-DEFAULT_POLL = "poll_08649098fc"
-
 
 def _repo():
     from google.cloud import firestore
@@ -60,8 +57,8 @@ def plan(repo, deadline: datetime, poll_id: str, now: datetime | None = None) ->
 
 def main(argv: list[str] | None = None, repo=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--deadline", default=DEFAULT_DEADLINE, help="提出締切（日本時間）")
-    ap.add_argument("--poll", default=DEFAULT_POLL, help="上程先の会議の日程調整 ID")
+    ap.add_argument("--deadline", required=True, help="提出締切（日本時間。例: 2027-01-31T23:59）")
+    ap.add_argument("--poll", required=True, help="上程先の会議の日程調整 ID")
     ap.add_argument("--apply", action="store_true", help="書き込む（無ければ確認だけ）")
     args = ap.parse_args(argv)
     repo = repo or _repo()
