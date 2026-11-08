@@ -32,3 +32,11 @@ data/
 
 # OAuth クライアントの鍵（scripts/gmail_oauth_setup.py で使う。中身は Secret Manager に登録済み）
 client_secret*.json
+
+# 手元だけの素材（発表資料・動画・記事の原稿・LOM の規約）。公開しない
+docs/demo/
+docs/legal/
+
+# 手元の画像
+/icon.png
+/icon.jpg
