@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import ContactTabs from "../components/ContactTabs";
+import { KIND_LABELS, RelayPanels, relayState, type RelayInfo } from "./NoticeRelay";
 import {
   Badge,
   Button,
@@ -42,6 +43,7 @@ type Notice = {
   digest: Digest | null;
   status: string;
   delivery?: { delivered_at: string; target_count: number } | null;
+  relay?: RelayInfo | null; // LINE グループから取り込んだ連絡（docs/line-relay-design.md）
 };
 type DeliverResult = { targets: number; sent: number; blocked: number; deferred: number; failed: number };
 type NoticeAction = {
@@ -279,11 +281,19 @@ export default function Notices() {
                         <button type="button" className="text-left font-bold hover:underline" onClick={() => openDetail(n.notice_id)}>
                           {n.subject}
                         </button>
-                        {n.digest?.summary && <div className="mt-0.5 line-clamp-1 text-xs text-ink-sub">{n.digest.summary}</div>}
+                        {n.relay ? (
+                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-ink-sub">
+                            <Badge tone={relayState(n.relay, n.status).tone}>{relayState(n.relay, n.status).label}</Badge>
+                            {n.relay.kind === "share" && <span className="shrink-0">{KIND_LABELS.share}</span>}
+                            {n.relay.summary && <span className="line-clamp-1">{n.relay.summary}</span>}
+                          </div>
+                        ) : (
+                          n.digest?.summary && <div className="mt-0.5 line-clamp-1 text-xs text-ink-sub">{n.digest.summary}</div>
+                        )}
                       </td>
                       <td className="text-ink-sub">{sender(n)}</td>
                       <td className="whitespace-nowrap">
-                        <DueBadge iso={n.digest?.deadline} settled={n.status === "archived"} />
+                        <DueBadge iso={n.digest?.deadline ?? n.relay?.deadline} settled={n.status === "archived"} />
                       </td>
                       <td className="whitespace-nowrap">
                         <Badge tone={st.tone}>{st.label}</Badge>
@@ -688,7 +698,13 @@ function NoticeDetail({
             <Badge tone={st.tone}>{st.label}</Badge>
             <span>{sender(notice)}</span>
             <span className="num">受信 {fmtDateTime(notice.received_at)}</span>
-            <span>{notice.source === "gmail" ? "Gmail から自動で取り込み" : "貼り付けて取り込み"}</span>
+            <span>
+              {notice.source === "gmail"
+                ? "Gmail から自動で取り込み"
+                : notice.source === "line_group"
+                  ? "LINE グループから自動で取り込み"
+                  : "貼り付けて取り込み"}
+            </span>
           </span>
         }
         actions={
@@ -700,6 +716,15 @@ function NoticeDetail({
         }
       />
 
+      {notice.relay ? (
+        <RelayPanels
+          noticeId={notice.notice_id}
+          status={notice.status}
+          original={<OriginalPanel notice={notice} />}
+          onChanged={onChanged}
+        />
+      ) : (
+      <>
       <div className="grid gap-4 lg:grid-cols-2">
         {/* 1. 内容を確認 */}
         <Panel
@@ -738,21 +763,7 @@ function NoticeDetail({
           )}
         </Panel>
 
-        <Panel title="原文">
-          <div className="max-h-[420px] overflow-y-auto whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-sm leading-relaxed">
-            {notice.body_text}
-          </div>
-          {notice.attachments.length > 0 && (
-            <div className="mt-3">
-              <div className="field-label">添付ファイル</div>
-              <ul className="space-y-0.5 text-sm">
-                {notice.attachments.map((a, i) => (
-                  <li key={i}>・{a.name}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </Panel>
+        <OriginalPanel notice={notice} />
       </div>
 
       {/* 2. 会員へ届ける */}
@@ -887,6 +898,28 @@ function NoticeDetail({
           </div>
         )}
       </Panel>
+      </>
+      )}
     </div>
+  );
+}
+
+function OriginalPanel({ notice }: { notice: Notice }) {
+  return (
+    <Panel title="原文">
+      <div className="max-h-[420px] overflow-y-auto whitespace-pre-wrap rounded-xl bg-gray-50 p-3 text-sm leading-relaxed">
+        {notice.body_text || <span className="text-ink-faint">（本文なし）</span>}
+      </div>
+      {notice.attachments.length > 0 && (
+        <div className="mt-3">
+          <div className="field-label">添付ファイル</div>
+          <ul className="space-y-0.5 text-sm">
+            {notice.attachments.map((a, i) => (
+              <li key={i}>・{a.name}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Panel>
   );
 }

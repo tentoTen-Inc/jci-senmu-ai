@@ -625,6 +625,8 @@ class NoticeRelay(BaseModel):
     sent_at: datetime | None = None
     target_group_id: str | None = None
     post_id: str | None = None  # ScheduledPost
+    #: 管理画面で直した転送する文面（見出しを含む。メンションは除く）。None なら見出し＋原文
+    text: str | None = None
     expired_at: datetime | None = None
 
 
