@@ -203,6 +203,26 @@ _FEEDBACK_TRIAGE_PROMPT = """あなたは{lom_name}の LINE ボット「{bot_nam
 # 出力(JSONのみ)
 """
 
+_RELAY_JUDGE_PROMPT = """あなたは{lom_name}の専務理事の補佐です。
+ブロック協議会などのLINEグループ（出所: {label}）に、各地の青年会議所（LOM）あての投稿が届きました。
+自分のLOMの会員全員へ転送すべきものかを判定し、JSONで出力してください。
+
+出力フィールド:
+- kind: 次のいずれか
+  - share: 各LOMの会員（メンバー）全員に知らせてほしい・展開してほしいという依頼。
+    動画の視聴、アンケートの回答、事業への参加の呼びかけ、案内の共有など
+  - officer: 理事長・専務・役員・担当者など、特定の役職の人への依頼や連絡
+    （例: 「各LOM理事長の皆様」「専務の皆様へ」、出欠の取りまとめ、書類の提出）
+  - other: お礼・あいさつ・返信・雑談・すでに済んだことの報告など、転送しなくてよいもの
+- summary: 専務が判断するための要約（60字以内・本文に無いことを足さない）
+- deadline: 期限があれば YYYY-MM-DD、無ければ null
+
+# 投稿
+{body}
+{files}
+# 出力(JSONのみ)
+"""
+
 _FEEDBACK_DIGEST_PROMPT = """あなたは{lom_name}の LINE ボット「{bot_name}」の
 開発を手伝うアシスタントです。意見箱に届いた意見を読み、似た意見をまとめて傾向を出し、JSONで出力してください。
 
@@ -294,6 +314,9 @@ TASK_MODELS: dict[str, str] = {
     "minutes_verify": PRO,  # わからない所の画面の細かい読み取り（資料の行・表示名）
     "minutes_draft": PRO,  # 議案ごとの要点・意見・宿題の抽出
     "minutes_committee": PRO,  # 委員会に関わる意見の抜き出し（議案の外に散らばる意見も拾う）
+    # 外部グループの投稿が「会員への周知依頼」か（docs/line-relay-design.md §3）。5分おきに
+    # 数件・短文の分類なので Flash。判定は助言で、送る前に必ず専務が原文を見て承認する
+    "relay_judge": FLASH,
 }
 
 
@@ -304,6 +327,7 @@ TASK_THINKING_BUDGET: dict[str, int | None] = {
     "member_qa": 0,  # 材料に書いてあることを答える。考えなくても質は同等だった
     "calendar_intent": 512,  # 「来週火曜」等の日付の計算があるので少しだけ考えさせる
     "doc_edit": 1024,  # 依頼と今の内容・参考資料を突き合わせて文章を組み立てる
+    "relay_judge": 0,  # 宛先と依頼の言い回しを見るだけ。考えなくても足りる
 }
 
 
@@ -853,3 +877,45 @@ def digest_feedback(items: list[tuple[str, str, str]]) -> FeedbackDigestOutcome 
     return FeedbackDigestOutcome(digest=digest, usage=InferenceUsage(
         model=model, input_tokens=gen.input_tokens, output_tokens=gen.output_tokens,
     ))
+
+
+# --------------------------------------------------------------------------- #
+# 外部グループからの周知の判定（docs/line-relay-design.md §3）
+# --------------------------------------------------------------------------- #
+RELAY_KINDS = ("share", "officer", "other")
+
+
+class RelayJudgement(BaseModel):
+    kind: str
+    summary: str
+    deadline: datetime | None = None
+    usage: InferenceUsage
+
+
+def generate_relay_judgement(prompt: str, *, model: str, project: str,
+                             location: str) -> Generation:
+    """周知の判定の生成（テストでモックする境界）。"""
+    return _call_gemini(prompt, model=model, project=project, location=location,
+                        thinking_budget=thinking_budget_for("relay_judge"))
+
+
+def judge_relay(label: str, body: str, file_names: list[str]) -> RelayJudgement | None:
+    """投稿が会員への周知依頼か（share / officer / other）と要約。失敗時は None。"""
+    model, project, location = _target("relay_judge")
+    files = ("# 添付ファイル\n" + "\n".join(f"- {n}" for n in file_names) + "\n"
+             if file_names else "")
+    prompt = _RELAY_JUDGE_PROMPT.format(lom_name=lom.lom_name(), label=label,
+                                        body=body or "（本文なし）", files=files)
+    try:
+        gen = generate_relay_judgement(prompt, model=model, project=project, location=location)
+        data = json.loads(gen.text)
+        kind = _opt_str(data.get("kind"))
+        if kind not in RELAY_KINDS:
+            raise ValueError(f"unknown kind: {kind!r}")
+        summary = (_opt_str(data.get("summary")) or "")[:80]
+    except Exception:  # noqa: BLE001 - LLM未設定/失敗でも本処理は止めない
+        logger.exception("周知の判定に失敗しました")
+        return None
+    return RelayJudgement(kind=kind, summary=summary, deadline=_parse_date(data.get("deadline")),
+                          usage=InferenceUsage(model=model, input_tokens=gen.input_tokens,
+                                               output_tokens=gen.output_tokens))

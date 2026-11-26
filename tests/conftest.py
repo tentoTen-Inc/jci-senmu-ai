@@ -64,6 +64,20 @@ def _no_secret_manager(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_gemini(monkeypatch):
+    """本物の Vertex AI に繋がない（手元の ADC が生きていると実際に呼んで課金されてしまう）。
+
+    AI の応答が要るテストは、各 generate_* を差し替える。
+    """
+    from app import llm
+
+    def _blocked(url, body):
+        raise RuntimeError("テストから本物の Gemini は呼ばない")
+
+    monkeypatch.setattr(llm, "_post_gemini", _blocked)
+
+
+@pytest.fixture(autouse=True)
 def _iap_test_keys(monkeypatch):
     """IAP の公開鍵をネットから取らず、テスト用の鍵を使う。"""
     from app import iap

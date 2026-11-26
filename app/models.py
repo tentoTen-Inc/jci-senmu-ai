@@ -615,8 +615,11 @@ class NoticeRelay(BaseModel):
     message_ids: list[str] = Field(default_factory=list)  # まとめた投稿
     kind: str | None = None  # share | officer | other（AI の判定。判定前は None）
     summary: str | None = None
+    deadline: datetime | None = None
     judged_at: datetime | None = None
-    card_sent_at: datetime | None = None
+    judge_tries: int = 0
+    judge_failed_at: datetime | None = None
+    card_sent_at: datetime | None = None  # share は確認カード、officer は知らせを送った時刻
     approved_by: str | None = None
     approved_at: datetime | None = None
     sent_at: datetime | None = None
@@ -1015,9 +1018,11 @@ class ScheduledPost(BaseModel):
     group_id: str
     #: link_invite（LINE 連携のお願い） | poll_announce（日程調整の案内）
     #: | poll_remind（日程調整の催促） | poll_decide（日程調整の確定と決定の連絡）
+    #: | relay（外部グループからの周知の転送）
     kind: str
     poll_id: str | None = None  # kind=poll_* のとき
     candidate_id: str | None = None  # kind=poll_decide のとき、確定する候補日
+    notice_id: str | None = None  # kind=relay（外部グループからの周知の転送）のとき
     send_at: datetime
     status: ScheduledPostStatus = ScheduledPostStatus.pending
     sent_at: datetime | None = None

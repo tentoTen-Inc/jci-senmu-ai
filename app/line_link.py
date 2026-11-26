@@ -21,6 +21,7 @@ from .models import (
     LinkRequestStatus,
     Member,
     MemberStatus,
+    ScheduledPost,
     ScheduledPostStatus,
 )
 from .repository import Repository
@@ -278,6 +279,11 @@ def send_due_posts(repo: Repository, now: datetime) -> list[dict] | None:
            if p.status == ScheduledPostStatus.pending and p.send_at <= now]
     if not due:
         return None
+    return send_posts(repo, due, now)
+
+
+def send_posts(repo: Repository, due: list[ScheduledPost], now: datetime) -> list[dict]:
+    """予約投稿を送る（送信時刻の判断は呼び側）。緊急停止中は送らずに待つ。"""
     if repo.get_settings().kill_switch:
         logger.warning("緊急停止中のため予約投稿を保留: %d件", len(due))
         return [{"post_id": p.post_id, "result": "held"} for p in due]
@@ -304,6 +310,10 @@ def send_due_posts(repo: Repository, now: datetime) -> list[dict] | None:
                 else:
                     # 確定すると予定（下書き）を作ってカレンダーへ登録し、グループへ決定を連絡する
                     sp.decide(repo, poll, post.candidate_id or "", "scheduled", now)
+            elif post.kind == "relay":
+                from . import relay  # 循環 import を避ける
+
+                relay.send_relay(repo, post, now)
             else:
                 raise sp.PollError(400, f"未知の種類: {post.kind}")
             post = post.model_copy(update={"status": ScheduledPostStatus.sent, "sent_at": now})
