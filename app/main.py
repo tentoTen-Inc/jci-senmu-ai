@@ -497,6 +497,8 @@ def handle_postback(user_id: str, data: str, params: dict | None = None) -> list
         return handle_done_postback(repo, member.member_id, data)
     if data.startswith(f"{line_link.ACTION_LINK}|"):
         return line_link.handle_postback(repo, member, data, now=datetime.now())
+    if data.startswith(f"{relay.ACTION}|"):
+        return relay.handle_postback(repo, member, data, now=datetime.now())
     if data.startswith(f"{proposal_submit.ACTION_PLAN}|"):
         return proposal_submit.handle_plan_postback(repo, member, data, params, datetime.now())
     return apply_postback(repo, member, data, now=datetime.now())
@@ -616,7 +618,8 @@ def tasks_tick():
 def tasks_relay():
     """外部グループからの周知の転送（docs/line-relay-design.md §2.3）。Cloud Scheduler から5分おき。
 
-    取込元グループに溜めた投稿のうち、最後の投稿から10分たったものを1件の対外連絡にまとめる。
+    取込元グループに溜めた投稿のうち、最後の投稿から10分たったものを1件の対外連絡にまとめ、
+    AI の判定・専務への確認カード・期限切れを進める。
     同じ5分枠の重複起動（手動実行・Scheduler の再試行）は何もしない。
     """
     repo = get_repo()
@@ -624,8 +627,7 @@ def tasks_relay():
     slot = f"relay:{now:%Y%m%d%H}{now.minute // 5:02d}"
     if not repo.claim_once(slot):
         return {"skipped": "already_ran", "slot": slot}
-    created = relay.finalize(repo, now)
-    return {"created": [n.notice_id for n in created]}
+    return relay.process(repo, now)
 
 
 @app.get("/files/{token}")
