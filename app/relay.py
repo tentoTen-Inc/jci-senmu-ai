@@ -272,7 +272,9 @@ def judge(repo: Repository, notice: ExternalNotice, now: datetime) -> ExternalNo
 # 転送する文面（§4.2）
 # --------------------------------------------------------------------------- #
 def relay_text(repo: Repository, notice: ExternalNotice) -> str:
-    """転送する文面（メンションを除く）。見出し＋原文そのまま。"""
+    """転送する文面（メンションを除く）。見出し＋原文そのまま。管理画面で直した文面があればそれ。"""
+    if notice.relay.text:
+        return notice.relay.text
     head = f"【{_label(repo, notice.relay.group_id)}より】"
     return f"{head}\n{notice.body_text}" if notice.body_text else head
 
@@ -318,13 +320,28 @@ def relay_messages(repo: Repository, notice: ExternalNotice) -> list[Message]:
     return [first, *(TextMessage(text=p) for p in parts[1:])]
 
 
+GROUP_KEYS = {"all": "会員全員", "riji": "理事会", "goyaku": "五役"}  # 設定の案内先の種類
+
+
+def _group_name(repo: Repository, group_id: str, fallback: str) -> str:
+    group = repo.get_line_group(group_id)
+    return group.group_name if group and group.group_name else fallback
+
+
 def target_group(repo: Repository) -> tuple[str | None, str]:
     """転送先（設定の案内先「会員全員」）の ID と名前。"""
     group_id = repo.get_settings().line_groups.get("all")
     if not group_id:
         return None, "（未設定）"
-    group = repo.get_line_group(group_id)
-    return group_id, (group.group_name if group and group.group_name else "会員全員のグループ")
+    return group_id, _group_name(repo, group_id, "会員全員のグループ")
+
+
+def target_groups(repo: Repository) -> list[dict]:
+    """管理画面から選べる転送先（設定の案内先のうち決まっているもの。会員全員が先頭）。"""
+    groups = repo.get_settings().line_groups
+    return [{"key": key, "label": label, "group_id": groups[key],
+             "group_name": _group_name(repo, groups[key], f"{label}のグループ")}
+            for key, label in GROUP_KEYS.items() if groups.get(key)]
 
 
 # --------------------------------------------------------------------------- #
@@ -531,8 +548,6 @@ def handle_postback(repo: Repository, member: Member, data: str,
 def approve(repo: Repository, notice: ExternalNotice, actor: str, member_id: str | None,
             now: datetime) -> list[Message]:
     """承認して予約投稿を作り、静音時間でなければその場で送る。"""
-    from . import line_link  # 循環 import を避ける
-
     group_id, group_name = target_group(repo)
     if group_id is None:
         return _reply("転送先（設定の案内先「会員全員」）が決まっていません。")
@@ -543,8 +558,29 @@ def approve(repo: Repository, notice: ExternalNotice, actor: str, member_id: str
     # 二度押し・同時押しで二重に送らない
     if not repo.claim_once(f"relay_approve:{notice.notice_id}"):
         return _reply("この連絡はすでに転送を受け付けています。")
+    result, send_at = schedule(repo, notice, group_id, actor, member_id, now,
+                               post_id=f"relay_{notice.notice_id}")
+    if result == "scheduled":
+        return _reply(f"静音時間のため、{send_at:%-m月%-d日 %H:%M}に「{group_name}」へ送ります。")
+    if result == "held":
+        return _reply("緊急停止中のため、送信を保留しています。"
+                      "停止を解くと次の定期処理で送ります。")
+    if result != "sent":
+        return _reply("送信に失敗しました。管理画面の「送信の記録」をご確認ください。")
+    return _reply(f"「{group_name}」に転送しました。")
+
+
+def schedule(repo: Repository, notice: ExternalNotice, group_id: str, actor: str,
+             member_id: str | None, now: datetime, post_id: str) -> tuple[str, datetime]:
+    """承認を記録して予約投稿を作り、静音時間でなければその場で送る。
+
+    (結果, 送る時刻) を返す。結果は sent / scheduled（静音時間明けに送る）/ held（緊急停止中）/
+    failed。
+    """
+    from . import line_link  # 循環 import を避ける
+
     send_at = next_send_time(now, repo.get_settings())
-    post = ScheduledPost(post_id=f"relay_{notice.notice_id}", group_id=group_id, kind="relay",
+    post = ScheduledPost(post_id=post_id, group_id=group_id, kind="relay",
                          notice_id=notice.notice_id, send_at=send_at, created_at=now,
                          created_by=actor)
     repo.save_scheduled_post(post)
@@ -557,14 +593,9 @@ def approve(repo: Repository, notice: ExternalNotice, actor: str, member_id: str
     write_audit(repo, actor=actor, action="notice.relay.approve", target=notice.notice_id,
                 detail=f"→ {group_id}")
     if send_at > now:
-        return _reply(f"静音時間のため、{send_at:%-m月%-d日 %H:%M}に「{group_name}」へ送ります。")
+        return "scheduled", send_at
     [result] = line_link.send_posts(repo, [post], now)
-    if result["result"] == "held":
-        return _reply("緊急停止中のため、送信を保留しています。"
-                      "停止を解くと次の定期処理で送ります。")
-    if result["result"] != "sent":
-        return _reply("送信に失敗しました。管理画面の「送信の記録」をご確認ください。")
-    return _reply(f"「{group_name}」に転送しました。")
+    return result["result"], send_at
 
 
 def send_relay(repo: Repository, post: ScheduledPost, now: datetime) -> None:

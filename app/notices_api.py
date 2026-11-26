@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from . import gmail
+from . import gmail, relay
 from .audit import write_audit
 from .delivery import execute_delivery
 from .deps import get_repo
@@ -431,3 +431,101 @@ def archive_notice(
     repo.upsert_notice(notice)
     write_audit(repo, actor=actor, action="notice.archive", target=notice_id)
     return notice
+
+
+# --------------------------------------------------------------------------- #
+# 外部グループからの周知の転送（docs/line-relay-design.md §5）
+# --------------------------------------------------------------------------- #
+def _relay_notice(notice_id: str) -> ExternalNotice:
+    notice = get_repo().get_notice(notice_id)
+    if notice is None:
+        raise HTTPException(status_code=404, detail="notice not found")
+    if notice.relay is None:
+        raise HTTPException(status_code=400,
+                            detail="LINE グループから取り込んだ連絡ではありません。")
+    return notice
+
+
+def _relay_view(notice: ExternalNotice) -> dict:
+    repo = get_repo()
+    r = notice.relay
+    default = relay.relay_text(repo, notice.model_copy(
+        update={"relay": r.model_copy(update={"text": None})}))
+    post = next((p for p in repo.list_scheduled_posts() if p.post_id == r.post_id), None) \
+        if r.post_id else None
+    target = None
+    if r.target_group_id:
+        group = repo.get_line_group(r.target_group_id)
+        target = group.group_name if group and group.group_name else r.target_group_id
+    return {
+        "label": relay._label(repo, r.group_id),
+        "text": relay.relay_text(repo, notice),
+        "default_text": default,
+        "edited": bool(r.text),
+        "groups": relay.target_groups(repo),
+        "kind": r.kind,
+        "summary": r.summary,
+        "deadline": r.deadline,
+        "card_sent_at": r.card_sent_at,
+        "approved_at": r.approved_at,
+        "approved_by": r.approved_by,
+        "sent_at": r.sent_at,
+        "expired_at": r.expired_at,
+        "target_group_name": target,
+        "post": post.model_dump(mode="json", include={"status", "send_at", "sent_at", "error"})
+        if post else None,
+    }
+
+
+@router.get("/notices/{notice_id}/relay")
+def get_relay(notice_id: str):
+    """転送の状況・転送する文面・選べる転送先。"""
+    return _relay_view(_relay_notice(notice_id))
+
+
+class RelaySend(BaseModel):
+    group_key: str  # all | riji | goyaku（設定の案内先）
+    text: str  # 転送する文面（見出しを含む。@All は送るときに付ける）
+    force: bool = False  # 転送済み・送信待ちでも、もう一度送る
+
+
+@router.post("/notices/{notice_id}/relay")
+def send_relay(
+    notice_id: str,
+    payload: RelaySend,
+    x_goog_authenticated_user_email: str | None = Header(default=None),
+):
+    """管理画面からグループへ転送する（文面を直せる。理事会・五役も選べる）。取り消せない。"""
+    repo = get_repo()
+    notice = _relay_notice(notice_id)
+    groups = {g["key"]: g for g in relay.target_groups(repo)}
+    group = groups.get(payload.group_key)
+    if group is None:
+        raise HTTPException(status_code=400,
+                            detail="転送先のグループが設定されていません（設定の案内先）。")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="転送する文面が空です。")
+    r = notice.relay
+    if not payload.force:
+        if r.sent_at:
+            raise HTTPException(status_code=409, detail="この連絡は転送済みです（force=true）。")
+        pending = r.post_id and any(
+            p.post_id == r.post_id and p.status == "pending" for p in repo.list_scheduled_posts())
+        if pending:
+            raise HTTPException(status_code=409,
+                                detail="送信待ちの転送があります（force=true）。")
+    default = _relay_view(notice)["default_text"]
+    notice = notice.model_copy(update={
+        "relay": r.model_copy(update={"text": None if text == default else text})})
+    try:
+        relay.relay_messages(repo, notice)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    repo.upsert_notice(notice)
+    actor = _actor(x_goog_authenticated_user_email)
+    result, send_at = relay.schedule(
+        repo, notice, group["group_id"], actor, None, datetime.now(),
+        post_id=f"relay_{notice_id}_{uuid.uuid4().hex[:6]}")
+    return {"result": result, "send_at": send_at, "group_name": group["group_name"],
+            "relay": _relay_view(repo.get_notice(notice_id))}
