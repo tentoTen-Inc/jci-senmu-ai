@@ -26,8 +26,8 @@ import urllib.request
 import uuid
 from datetime import datetime, timedelta
 
-from . import config, gmail, lake
-from .models import LineGroup
+from . import config, gmail, lake, relay
+from .models import LineGroup, NoticeAttachment
 from .repository import Repository
 
 logger = logging.getLogger("jci-agent.line_worker")
@@ -215,35 +215,40 @@ def _publish_content(message_id: str, status: str, payload: dict, **extra) -> No
 
 def store_content(payload: dict) -> str:
     """メッセージのファイルを LINE から取得して保存する。結果の status を返す。"""
+    return _store_content(payload)[0]
+
+
+def _store_content(payload: dict) -> tuple[str, NoticeAttachment | None]:
+    """store_content の本体。保存したファイルを対外連絡の添付の形でも返す（転送用）。"""
     message = payload.get("message") or {}
     message_id = message.get("id")
     provider = (message.get("contentProvider") or {}).get("type", "line")
     if provider != "line":
         _publish_content(message_id, "external", payload,
                          original_url=message["contentProvider"].get("originalContentUrl"))
-        return "external"
+        return "external", None
     limit = max_bytes()
     declared = message.get("fileSize")
     if isinstance(declared, int) and declared > limit:
         _publish_content(message_id, "too_large", payload, size=declared,
                          file_name=message.get("fileName"))
-        return "too_large"
+        return "too_large", _named(message)
 
     status, headers, raw = _line_get(f"{LINE_DATA_API}/{message_id}/content", limit=limit)
     if status == 202:
         raise RetryLater("動画・音声の変換待ち")
     if status in (404, 410):
         _publish_content(message_id, "unavailable", payload, file_name=message.get("fileName"))
-        return "unavailable"
+        return "unavailable", _named(message)
     if status >= 500 or status == 429:
         raise RetryLater(f"LINE content {status}")
     if status != 200:
         _publish_content(message_id, "failed", payload, http_status=status,
                          file_name=message.get("fileName"))
-        return "failed"
+        return "failed", _named(message)
     if len(raw) > limit:
         _publish_content(message_id, "too_large", payload, file_name=message.get("fileName"))
-        return "too_large"
+        return "too_large", _named(message)
 
     content_type = {k.lower(): v for k, v in headers.items()}.get(
         "content-type", "application/octet-stream"
@@ -259,12 +264,20 @@ def store_content(payload: dict) -> str:
         text = gmail.pdf_text(raw)
         if text:
             text = text[:PDF_TEXT_LIMIT]
+    gcs_uri = f"gs://{bucket()}/{name}"
     _publish_content(
         message_id, "stored", payload,
-        gcs_uri=f"gs://{bucket()}/{name}", content_type=content_type, size=len(raw),
+        gcs_uri=gcs_uri, content_type=content_type, size=len(raw),
         sha256=hashlib.sha256(raw).hexdigest(), file_name=filename, text=text,
     )
-    return "stored"
+    return "stored", NoticeAttachment(name=filename, mime=content_type, storage_uri=gcs_uri,
+                                      text_excerpt=text[:2000] if text else None)
+
+
+def _named(message: dict) -> NoticeAttachment | None:
+    """保存できなかったファイル（名前だけ残す）。"""
+    name = message.get("fileName")
+    return NoticeAttachment(name=name) if name else None
 
 
 def delete_unsent(payload: dict) -> int:
@@ -363,10 +376,21 @@ def handle_envelope(repo: Repository, env: dict, now: datetime) -> str:
         from_member = _from_member(repo, payload) if media or _unmarked_group(payload) else None
         if from_member:
             mark_member_group(repo, payload, now)
+        # 取込元グループ（管理画面で指定。docs/line-relay-design.md §2.2）の投稿は転送のために溜める
+        source = relay.is_source(repo, payload, now)
         if media:
             # 会員でない人のファイルは保存しない（友だち追加しただけの人や、知らない人が
-            # ボットを招いたグループから、保存の費用を増やされないように）
-            return store_content(payload) if from_member else "skipped_non_member"
+            # ボットを招いたグループから、保存の費用を増やされないように）。
+            # 取込元グループだけは、転送のために送り主を問わず保存する
+            if not (from_member or source):
+                return "skipped_non_member"
+            status, attachment = _store_content(payload)
+            if source and attachment is not None:
+                relay.record_post(repo, payload, now, attachment=attachment)
+            return status
+        if source:
+            return "relay_buffered" if relay.record_post(repo, payload, now) else "noop"
     if event_type == "unsend":
+        relay.drop_unsent(repo, payload)
         return f"unsend:{delete_unsent(payload)}"
     return "noop"

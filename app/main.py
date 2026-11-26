@@ -62,6 +62,7 @@ from . import (
     proposal_return,
     proposal_submit,
     proposal_sync,
+    relay,
     rich_menu_link,
 )
 from . import lake_api as lake_api_module
@@ -609,6 +610,22 @@ def tasks_tick():
         "feedback": feedback_result, "proposal_notices": proposal_notice_result,
         "menus": menus_result,
     }
+
+
+@app.post("/tasks/relay")
+def tasks_relay():
+    """外部グループからの周知の転送（docs/line-relay-design.md §2.3）。Cloud Scheduler から5分おき。
+
+    取込元グループに溜めた投稿のうち、最後の投稿から10分たったものを1件の対外連絡にまとめる。
+    同じ5分枠の重複起動（手動実行・Scheduler の再試行）は何もしない。
+    """
+    repo = get_repo()
+    now = datetime.now()
+    slot = f"relay:{now:%Y%m%d%H}{now.minute // 5:02d}"
+    if not repo.claim_once(slot):
+        return {"skipped": "already_ran", "slot": slot}
+    created = relay.finalize(repo, now)
+    return {"created": [n.notice_id for n in created]}
 
 
 @app.get("/files/{token}")
