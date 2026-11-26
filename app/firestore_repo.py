@@ -39,6 +39,7 @@ from .models import (
     PendingProposalCreate,
     PollResponse,
     Proposal,
+    RelayPost,
     ReminderPolicy,
     ScheduledPost,
     SchedulePoll,
@@ -59,6 +60,7 @@ COL_CHAT_STATES = "chatStates"
 COL_DOC_SESSIONS = "docSessions"
 COL_PROPOSAL_CREATES = "pendingProposalCreates"
 COL_LINE_GROUPS = "lineGroups"
+COL_RELAY_POSTS = "relayPosts"  # 取込元グループの投稿（まとめる前。docs/line-relay-design.md）
 COL_JOBS = "deliveryJobs"
 COL_LOGS = "deliveryLogs"
 COL_ESCALATIONS = "escalations"
@@ -280,6 +282,19 @@ class FirestoreRepository:
             LineGroup.model_validate(d.to_dict())
             for d in self._db.collection(COL_LINE_GROUPS).stream()
         ]
+
+    def save_relay_post(self, post: RelayPost) -> None:
+        self._db.collection(COL_RELAY_POSTS).document(post.message_id).set(
+            post.model_dump(mode="json")
+        )
+
+    def list_relay_posts(self) -> list[RelayPost]:
+        return [RelayPost.model_validate(d.to_dict())
+                for d in self._db.collection(COL_RELAY_POSTS).stream()]
+
+    def delete_relay_posts(self, message_ids: list[str]) -> None:
+        for message_id in message_ids:
+            self._db.collection(COL_RELAY_POSTS).document(message_id).delete()
 
     # --- delivery ---
     def save_delivery_job(self, job: DeliveryJob) -> None:

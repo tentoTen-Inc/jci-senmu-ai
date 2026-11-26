@@ -20,6 +20,7 @@
 | 管理サービス | Cloud Run `jci-sed-admin`（`ROLE=admin`、IAP）。管理画面 `/app` と管理 API `/api` |
 | データ | Firestore（Native） |
 | 毎時の処理 | Cloud Scheduler `jci-tick`（毎時 8–21 時 JST、期限 300 秒）→ `POST /tasks/tick`。予約投稿・催促を先に送り、ドライブ取込・索引は最後 |
+| 周知の転送 | Cloud Scheduler `jci-relay`（5分おき）→ `POST /tasks/relay`。取込元グループの投稿を10分の区切りでまとめて対外連絡にする（`docs/line-relay-design.md`） |
 | シークレット | Secret Manager: `line-channel-secret` / `line-channel-access-token` / `admin-api-secret`（ほか Gmail の OAuth） |
 
 公開: `/`、`/health`、`/line/webhook`（署名検証）、`/liff/*`（LINE ログインで本人確認）、`/files/*`（署名付きリンク）。

@@ -240,6 +240,16 @@ gcloud scheduler jobs create http jci-tick --location "$REGION" \
   --headers "X-Admin-Token=$(gcloud secrets versions access latest --secret admin-api-secret)"
 ```
 
+ブロック協議会などのグループからの周知を転送する（`docs/line-relay-design.md`）なら、5分おきの
+`/tasks/relay` も登録します。取込元のグループを管理画面で指定するまでは何もしません。
+
+```bash
+gcloud scheduler jobs create http jci-relay --location "$REGION" \
+  --schedule "*/5 * * * *" --time-zone Asia/Tokyo \
+  --uri "${URL}/tasks/relay" --http-method POST --attempt-deadline 120s \
+  --headers "X-Admin-Token=$(gcloud secrets versions access latest --secret admin-api-secret)"
+```
+
 ### 4-4. 自動デプロイ（任意）
 
 GitHub の `main` へのマージで両サービスへ自動デプロイするには、次を 1 回実行します。

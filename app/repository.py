@@ -40,6 +40,7 @@ from .models import (
     PendingProposalCreate,
     PollResponse,
     Proposal,
+    RelayPost,
     ReminderPolicy,
     ScheduledPost,
     SchedulePoll,
@@ -97,6 +98,9 @@ class Repository(Protocol):
     def save_line_group(self, group: LineGroup) -> None: ...
     def get_line_group(self, group_id: str) -> LineGroup | None: ...
     def list_line_groups(self) -> list[LineGroup]: ...
+    def save_relay_post(self, post: RelayPost) -> None: ...
+    def list_relay_posts(self) -> list[RelayPost]: ...
+    def delete_relay_posts(self, message_ids: list[str]) -> None: ...
     def claim_line_event(self, event_id: str) -> bool:
         """LINE イベントの処理権を取る。初回だけ True（再送・重複配信は False）。"""
         ...
@@ -207,6 +211,7 @@ class InMemoryRepository:
         self._doc_edits: dict[tuple[str, str], DocEdit] = {}
         self._proposal_creates: dict[str, PendingProposalCreate] = {}
         self._line_groups: dict[str, LineGroup] = {}
+        self._relay_posts: dict[str, RelayPost] = {}
         self._jobs: dict[str, DeliveryJob] = {}
         self._logs: list[DeliveryLog] = []
         self._escalations: dict[str, Escalation] = {}
@@ -374,6 +379,16 @@ class InMemoryRepository:
 
     def list_line_groups(self) -> list[LineGroup]:
         return [g.model_copy(deep=True) for g in self._line_groups.values()]
+
+    def save_relay_post(self, post: RelayPost) -> None:
+        self._relay_posts[post.message_id] = post.model_copy(deep=True)
+
+    def list_relay_posts(self) -> list[RelayPost]:
+        return [p.model_copy(deep=True) for p in self._relay_posts.values()]
+
+    def delete_relay_posts(self, message_ids: list[str]) -> None:
+        for message_id in message_ids:
+            self._relay_posts.pop(message_id, None)
 
     # --- delivery ---
     def save_delivery_job(self, job: DeliveryJob) -> None:

@@ -25,6 +25,8 @@ type Group = {
   left_at: string | null;
   last_event_at: string | null;
   messages: number;
+  relay_source?: boolean;
+  relay_label?: string | null;
 };
 
 type Conversation = {
@@ -256,6 +258,7 @@ export default function LineGroups() {
                         <span className="num mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink-sub">
                           <span>{g.messages.toLocaleString()}件</span>
                           <span>最終 {fmtDateTime(g.last_event_at)}</span>
+                          {g.relay_source && <Badge tone="blue">周知の取込元</Badge>}
                         </span>
                       </span>
                       {g.left_at ? <Badge tone="gray">退出</Badge> : <Badge tone="green">参加中</Badge>}
@@ -294,6 +297,18 @@ export default function LineGroups() {
                     ]}
                   />
                 </div>
+
+                {current && !current.left_at && current.source_type === "group" && (
+                  <RelaySource
+                    group={current}
+                    onSaved={(src, label) =>
+                      setGroups((gs) =>
+                        gs.map((g) => (g.group_id === current.group_id ? { ...g, relay_source: src, relay_label: label } : g))
+                      )
+                    }
+                    toast={toast}
+                  />
+                )}
 
                 {opening ? (
                   <Loading />
@@ -455,6 +470,91 @@ function Bubble({
           {time}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 外部グループからの周知の取込元の指定（docs/line-relay-design.md §2.1）。 */
+function RelaySource({
+  group,
+  onSaved,
+  toast,
+}: {
+  group: Group;
+  onSaved: (src: boolean, label: string | null) => void;
+  toast: (m: string, tone?: "ok" | "error") => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(group.relay_label ?? "");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setEditing(false);
+    setLabel(group.relay_label ?? "");
+  }, [group.group_id, group.relay_label]);
+
+  async function save(src: boolean) {
+    setBusy(true);
+    try {
+      const res = await api<{ relay_source: boolean; relay_label: string | null }>(
+        `/line/groups/${encodeURIComponent(group.group_id)}/relay`,
+        { method: "PUT", body: JSON.stringify({ relay_source: src, relay_label: label }) }
+      );
+      onSaved(res.relay_source, res.relay_label);
+      setEditing(false);
+      toast(src ? "周知の取込元にしました" : "周知の取込元から外しました");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 bg-gray-50 px-5 py-3 text-sm">
+        <label className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="shrink-0 font-bold">出所名</span>
+          <input
+            className="min-w-0 flex-1"
+            placeholder="例: 〇〇ブロック協議会"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+          />
+        </label>
+        <Button variant="primary" size="sm" disabled={busy || !label.trim()} onClick={() => save(true)}>
+          保存
+        </Button>
+        <Button size="sm" disabled={busy} onClick={() => setEditing(false)}>
+          やめる
+        </Button>
+        <p className="w-full text-xs text-ink-sub">
+          このグループの「各LOMへ展開してください」という投稿を取り込み、専務の承認後に会員全員のグループへ「【出所名より】」の見出しを付けて転送します。
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-5 py-2.5 text-sm">
+      {group.relay_source ? (
+        <>
+          <Badge tone="blue">周知の取込元</Badge>
+          <span className="min-w-[10rem] flex-1 break-words text-ink-sub">出所名: {group.relay_label}</span>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => setEditing(true)}>
+            出所名を直す
+          </Button>
+          <Button variant="danger" size="sm" disabled={busy} onClick={() => save(false)}>
+            取込元から外す
+          </Button>
+        </>
+      ) : (
+        <>
+          <span className="min-w-[12rem] flex-1 text-ink-sub">ブロック協議会などからの周知を会員へ転送するグループなら、取込元にします。</span>
+          <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
+            周知の取込元にする
+          </Button>
+        </>
+      )}
     </div>
   );
 }

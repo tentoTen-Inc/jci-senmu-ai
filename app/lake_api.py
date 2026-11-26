@@ -12,9 +12,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Header, HTTPException, Response
+from pydantic import BaseModel
 
-from . import config, csv_safe, lake, lake_query
+from . import config, csv_safe, lake, lake_query, relay
+from .audit import write_audit
 from .deps import get_repo
 
 router = APIRouter()
@@ -49,7 +51,42 @@ def line_groups():
         group = ledger.get(row["group_id"])
         if group and not row.get("group_name"):
             row["group_name"] = group.group_name
+        # 外部グループからの周知の転送（docs/line-relay-design.md §2.1）
+        row["relay_source"] = bool(group and group.relay_source)
+        row["relay_label"] = group.relay_label if group else None
     return rows
+
+
+class RelaySourceIn(BaseModel):
+    relay_source: bool
+    relay_label: str | None = None
+
+
+@router.put("/line/groups/{group_id}/relay")
+def put_relay_source(
+    group_id: str,
+    payload: RelaySourceIn,
+    x_goog_authenticated_user_email: str | None = Header(default=None),
+):
+    """グループを「周知の取込元」にする・外す。出所名は転送する文面の見出しに使う。"""
+    repo = get_repo()
+    group = repo.get_line_group(group_id)
+    if group is None:
+        raise HTTPException(status_code=404, detail="ボットが参加していないグループです。")
+    label = (payload.relay_label or "").strip() or None
+    if payload.relay_source and not label:
+        raise HTTPException(status_code=400,
+                            detail="出所名（例: 〇〇ブロック協議会）を入れてください。")
+    group.relay_source, group.relay_label = payload.relay_source, label
+    repo.save_line_group(group)
+    relay.forget_source(group_id)
+    write_audit(
+        repo, actor=x_goog_authenticated_user_email or "unknown",
+        action="line_group.relay", target=group_id,
+        detail=f"relay_source={group.relay_source}",
+    )
+    return {"group_id": group_id, "relay_source": group.relay_source,
+            "relay_label": group.relay_label}
 
 
 def _limit(limit: int) -> int:

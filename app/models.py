@@ -290,6 +290,22 @@ class LineGroup(BaseModel):
     # 連携済みの会員の発言を初めて見た時刻。これがあるグループだけを LOM のグループとして扱う
     # （連携の申請画面を開ける人の判定）。知らない人がボットを招いたグループを信用しない
     member_seen_at: datetime | None = None
+    #: 外部グループからの周知の転送（docs/line-relay-design.md §2.1）。取込元に指定した
+    #: グループの投稿だけを取り込む。relay_label は転送する文面の見出しに使う出所名
+    #: （例「〇〇ブロック協議会」）
+    relay_source: bool = False
+    relay_label: str | None = None
+
+
+class RelayPost(BaseModel):
+    """取込元グループの投稿1件（まとめる前。docs/line-relay-design.md §2.3）。"""
+
+    message_id: str
+    group_id: str
+    user_id: str | None = None
+    sent_at: datetime
+    text: str | None = None
+    attachment: NoticeAttachment | None = None
 
 
 class CalendarSyncState(BaseModel):
@@ -592,13 +608,31 @@ class NoticeHistory(BaseModel):
     by: str = "system"
 
 
+class NoticeRelay(BaseModel):
+    """外部グループからの周知の転送の状態（docs/line-relay-design.md §4.3）。"""
+
+    group_id: str  # 取込元グループ
+    message_ids: list[str] = Field(default_factory=list)  # まとめた投稿
+    kind: str | None = None  # share | officer | other（AI の判定。判定前は None）
+    summary: str | None = None
+    judged_at: datetime | None = None
+    card_sent_at: datetime | None = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    sent_at: datetime | None = None
+    target_group_id: str | None = None
+    post_id: str | None = None  # ScheduledPost
+    expired_at: datetime | None = None
+
+
 class ExternalNotice(BaseModel):
     """ブロック協議会等からの対外連絡（docs/external-notice-design.md §3.1）。"""
 
     notice_id: str
     lom_id: str = Field(default_factory=_default_lom_id)
-    source: str = "manual"  # gmail | manual
-    source_ref: str | None = None  # Gmail message id / 本文ハッシュ（冪等キー）
+    source: str = "manual"  # gmail | manual | line_group
+    #: 冪等キー。Gmail message id / 本文ハッシュ / <group_id>:<最初の message_id>
+    source_ref: str | None = None
     received_at: datetime
     from_addr: str | None = None
     from_name: str | None = None
@@ -609,6 +643,10 @@ class ExternalNotice(BaseModel):
     status: str = "new"  # new | reviewed | delivered | archived
     delivery: NoticeDelivery | None = None
     history: list[NoticeHistory] = Field(default_factory=list)
+    relay: NoticeRelay | None = None  # LINE グループからの取込（source=line_group）だけ
+
+
+RelayPost.model_rebuild()
 
 
 # --------------------------------------------------------------------------- #
