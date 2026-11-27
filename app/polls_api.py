@@ -54,6 +54,13 @@ def _get(poll_id: str) -> SchedulePoll:
 class CandidateIn(BaseModel):
     start: datetime
     end: datetime | None = None
+    all_day: bool = False  # 時刻を決めず日付だけで聞く（start はその日の 0:00 に揃える）
+
+    def normalized(self) -> CandidateIn:
+        if not self.all_day:
+            return self
+        day = self.start.replace(hour=0, minute=0, second=0, microsecond=0)
+        return CandidateIn(start=day, end=None, all_day=True)
 
 
 class PollCreate(BaseModel):
@@ -82,7 +89,10 @@ def create(repo: Repository, payload: PollCreate, actor: str, now: datetime) -> 
             raise sp.PollError(400, "委員会を選んでください。")
     elif not payload.group_id:
         raise sp.PollError(400, "案内先の LINE グループを選んでください。")
-    candidates = sorted(payload.candidates, key=lambda c: c.start)
+    candidates = sorted((c.normalized() for c in payload.candidates), key=lambda c: c.start)
+    starts = [(c.start, c.all_day) for c in candidates]
+    if len(set(starts)) != len(starts):
+        raise sp.PollError(400, "同じ候補日時が重なっています。")
     poll = SchedulePoll(
         poll_id=sp.new_poll_id(),
         title=payload.title.strip(),
@@ -90,7 +100,8 @@ def create(repo: Repository, payload: PollCreate, actor: str, now: datetime) -> 
         fiscal_year=payload.fiscal_year,
         location=payload.location,
         audience=payload.audience,
-        candidates=[PollCandidate(candidate_id=sp.new_candidate_id(i), start=c.start, end=c.end)
+        candidates=[PollCandidate(candidate_id=sp.new_candidate_id(i), start=c.start, end=c.end,
+                                  all_day=c.all_day)
                     for i, c in enumerate(candidates)],
         target_scope=payload.target_scope,
         group_id=payload.group_id or None,

@@ -230,3 +230,44 @@ def test_liff_page_embeds_liff_id(repo, monkeypatch):
 def test_admin_poll_api_is_protected(repo):
     assert public.get("/api/polls").status_code == 401
     assert not "/liff/api/polls/x".startswith(main.PROTECTED_PREFIXES)
+
+
+# --------------------------------------------------------------------------- #
+# 日付だけの候補（京都会議のような終日の行事）
+# --------------------------------------------------------------------------- #
+ALL_DAY = [{"start": "2027-01-22T19:00:00", "all_day": True},
+           {"start": "2027-01-21T00:00:00", "all_day": True}]
+
+
+def test_all_day_candidates_have_no_time(repo, pushed):
+    data = _create(title="2027京都会議", candidates=ALL_DAY)
+    assert [c["label"] for c in data["candidates"]] == ["1/21(木)", "1/22(金)"]
+    poll = repo.get_poll(data["poll"]["poll_id"])
+    # 時刻は 0:00 に揃え、終了時刻は持たない
+    assert [(c.start.isoformat(), c.end, c.all_day) for c in poll.candidates] == [
+        ("2027-01-21T00:00:00", None, True), ("2027-01-22T00:00:00", None, True)]
+
+    admin.post(f"/api/polls/{poll.poll_id}/announce")
+    flex = str(pushed[0][1][0].to_dict())
+    assert "・1/21(木)" in flex and "00:00" not in flex
+
+    view = public.get(f"/liff/api/polls/{poll.poll_id}", headers=_auth("tok-a")).json()
+    assert [c["label"] for c in view["poll"]["candidates"]] == ["1/21(木)", "1/22(金)"]
+
+
+def test_all_day_decide_notifies_without_event(repo, pushed):
+    poll_id = _create(title="2027京都会議", candidates=ALL_DAY)["poll"]["poll_id"]
+    res = admin.post(f"/api/polls/{poll_id}/decide", json={"candidate_id": "c2"})
+    assert res.status_code == 200 and res.json()["event"] is None
+    poll = repo.get_poll(poll_id)
+    assert poll.status == PollStatus.decided and poll.event_id is None
+    assert repo.list_events() == []  # 時刻が無いので予定は作らない
+    text = pushed[0][1][0].text
+    assert "\n1月22日(金)（JC会館 or オンライン）に決まりました" in text and "00:00" not in text
+
+
+def test_duplicate_candidates_are_rejected(repo):
+    body = {"title": "x", "event_type": "五役会", "group_id": GROUP,
+            "candidates": [{"start": "2027-01-21T00:00:00", "all_day": True},
+                           {"start": "2027-01-21T10:00:00", "all_day": True}]}
+    assert admin.post("/api/polls", json=body).status_code == 400

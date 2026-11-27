@@ -20,7 +20,7 @@ import { useLom } from "../api/lom";
 // 日程調整（docs/schedule-poll-design.md・画面は docs/admin-ui-design.md）
 
 type Answer = "ok" | "maybe" | "ng";
-type Candidate = { candidate_id: string; start: string; end: string | null; label: string };
+type Candidate = { candidate_id: string; start: string; end: string | null; all_day?: boolean; label: string };
 type Poll = {
   poll_id: string;
   title: string;
@@ -255,6 +255,8 @@ type Draft = {
   committee: string;
   group_id: string;
   deadline: string;
+  /** 時刻を決めず日付だけで聞く（京都会議のような終日・複数日の行事） */
+  all_day: boolean;
   candidates: Cand[];
 };
 const newCand = (start = "19:00"): Cand => ({ date: "", start, end: "" });
@@ -268,6 +270,7 @@ const EMPTY: Draft = {
   committee: "",
   group_id: "",
   deadline: "",
+  all_day: false,
   candidates: [newCand(), newCand(), newCand()],
 };
 
@@ -339,9 +342,9 @@ function CreateForm({
     const cands = d.candidates.filter((c) => c.date);
     if (!d.title.trim()) return setProblem("1. 会議の名前を入力してください。");
     if (cands.length === 0) return setProblem("2. 候補日時を1つ以上入力してください。");
-    if (cands.some((c) => !c.start)) return setProblem("2. 候補日時の開始時刻を入力してください。");
-    if (cands.some((c) => c.end && c.end <= c.start)) return setProblem("2. 終了時刻は開始時刻より後にしてください。");
-    const keys = cands.map((c) => `${c.date}T${c.start}`);
+    if (!d.all_day && cands.some((c) => !c.start)) return setProblem("2. 候補日時の開始時刻を入力してください。");
+    if (!d.all_day && cands.some((c) => c.end && c.end <= c.start)) return setProblem("2. 終了時刻は開始時刻より後にしてください。");
+    const keys = cands.map((c) => (d.all_day ? c.date : `${c.date}T${c.start}`));
     if (new Set(keys).size !== keys.length) return setProblem("2. 同じ候補日時が重なっています。");
     if (d.target === "committee" && !d.committee) return setProblem("3. 委員会を選んでください。");
     if (d.target === "committee" && preview.length === 0) return setProblem("3. その委員会に会員が見つかりません。");
@@ -366,10 +369,11 @@ function CreateForm({
           fiscal_year: d.fiscal_year ? Number(d.fiscal_year) : null,
           location: d.location.trim() || null,
           audience: d.audience.trim() || null,
-          candidates: cands.map((c) => ({
-            start: `${c.date}T${c.start}`,
-            end: c.end ? `${c.date}T${c.end}` : null,
-          })),
+          candidates: cands.map((c) =>
+            d.all_day
+              ? { start: `${c.date}T00:00`, end: null, all_day: true }
+              : { start: `${c.date}T${c.start}`, end: c.end ? `${c.date}T${c.end}` : null },
+          ),
           target_scope,
           group_id: d.group_id || null,
           deadline: d.deadline || null,
@@ -384,7 +388,7 @@ function CreateForm({
     }
   }
 
-  const firstCand = filled.map((c) => `${c.date}T${c.start}`).sort()[0];
+  const firstCand = filled.map((c) => (d.all_day ? `${c.date}T00:00` : `${c.date}T${c.start}`)).sort()[0];
   const deadlineLate = d.deadline && firstCand && d.deadline >= firstCand;
 
   return (
@@ -412,18 +416,40 @@ function CreateForm({
         </div>
       </Step>
 
-      <Step no={2} title="候補日時" hint="時刻は 19:00 にしてあります。終了時刻は分かるときだけ入れてください。">
+      <Step
+        no={2}
+        title="候補日時"
+        hint={
+          d.all_day
+            ? "時刻は聞かず、日付ごとに ○△× で答えてもらいます。京都会議のような終日・複数日の行事の出欠にも使えます。"
+            : "時刻は 19:00 にしてあります。終了時刻は分かるときだけ入れてください。"
+        }
+      >
+        <div className="mb-3">
+          <Segmented
+            value={d.all_day ? "day" : "time"}
+            onChange={(v) => setD({ ...d, all_day: v === "day" })}
+            options={[
+              { value: "time", label: "日時で聞く" },
+              { value: "day", label: "日付だけで聞く" },
+            ]}
+          />
+        </div>
         <div className="space-y-2">
           {d.candidates.map((c, i) => (
             <div key={i} className="flex flex-wrap items-center gap-2">
               <span className="num w-6 text-right text-sm font-bold text-ink-sub">{i + 1}</span>
               <input type="date" aria-label={`候補${i + 1}の日付`} value={c.date}
                 onChange={(e) => setCand(i, { date: e.target.value })} />
-              <input type="time" aria-label={`候補${i + 1}の開始時刻`} className="w-28" value={c.start}
-                onChange={(e) => setCand(i, { start: e.target.value })} />
-              <span className="text-sm text-ink-sub">〜</span>
-              <input type="time" aria-label={`候補${i + 1}の終了時刻`} className="w-28" value={c.end}
-                onChange={(e) => setCand(i, { end: e.target.value })} />
+              {!d.all_day && (
+                <>
+                  <input type="time" aria-label={`候補${i + 1}の開始時刻`} className="w-28" value={c.start}
+                    onChange={(e) => setCand(i, { start: e.target.value })} />
+                  <span className="text-sm text-ink-sub">〜</span>
+                  <input type="time" aria-label={`候補${i + 1}の終了時刻`} className="w-28" value={c.end}
+                    onChange={(e) => setCand(i, { end: e.target.value })} />
+                </>
+              )}
               <Button size="sm" variant="danger" disabled={d.candidates.length <= 1}
                 onClick={() => setD({ ...d, candidates: d.candidates.filter((_, j) => j !== i) })}>
                 削除
@@ -598,7 +624,9 @@ function PollDetail({
         <>
           ○{n.ok}・△{n.maybe}・×{n.ng}
           <br />
-          「予定・出欠」に下書きで登録し、カレンダーにも入れます。
+          {c.all_day
+            ? "日付だけの候補なので、予定・出欠やカレンダーには登録しません（必要なら手で登録してください）。"
+            : "「予定・出欠」に下書きで登録し、カレンダーにも入れます。"}
           <br />
           {notify ? (
             <>決定のお知らせを {where}（対象 {s.rows.length} 人）に送ります。LINE への送信は取り消せません。</>
@@ -664,7 +692,7 @@ function PollDetail({
         {decided && (
           <div className="mt-4 flex flex-wrap items-center gap-3 rounded-2xl bg-line-soft px-4 py-3 text-sm text-line-ink">
             <span className="font-bold">{decided.label} に決定しました。</span>
-            <span>「予定・出欠」に下書きで登録してあります。</span>
+            {p.event_id && <span>「予定・出欠」に下書きで登録してあります。</span>}
             {p.event_id && (
               <Link to={`/events?id=${p.event_id}`} className="font-bold underline">予定・出欠で開く</Link>
             )}
@@ -756,7 +784,9 @@ function PollDetail({
       {p.status !== "decided" && (
         <Panel title="日程を決める">
           <p className="mb-3 text-sm text-ink-sub">
-            決めた日を「予定・出欠」に下書きで登録し、カレンダーにも入れます。
+            {s.candidates.some((c) => c.all_day)
+              ? "日付だけの候補なので、決めても「予定・出欠」やカレンダーには登録しません。日付ごとの出欠表としても使えます。"
+              : "決めた日を「予定・出欠」に下書きで登録し、カレンダーにも入れます。"}
           </p>
           <label className="mb-3 flex items-center gap-2">
             <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />

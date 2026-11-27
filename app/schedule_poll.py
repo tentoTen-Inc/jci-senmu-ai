@@ -25,7 +25,7 @@ from linebot.v3.messaging import FlexContainer, FlexMessage, Message, TextMessag
 from . import config, line_push
 from .audit import write_audit
 from .calendar_sync import push_event
-from .jpdate import month_day_time, weekday
+from .jpdate import month_day, month_day_time, weekday
 from .models import (
     Attendance,
     AttendanceHistory,
@@ -36,6 +36,7 @@ from .models import (
     Member,
     MemberStatus,
     PollAnswer,
+    PollCandidate,
     PollResponse,
     PollStatus,
     SchedulePoll,
@@ -226,9 +227,17 @@ def authorize_viewer(repo: Repository, poll: SchedulePoll, user_id: str) -> Memb
 # --------------------------------------------------------------------------- #
 # 表示・回答
 # --------------------------------------------------------------------------- #
-def candidate_label(start: datetime, end: datetime | None = None) -> str:
-    label = f"{start.month}/{start.day}({weekday(start)}) {start:%H:%M}〜"
+def candidate_label(start: datetime, end: datetime | None = None, all_day: bool = False) -> str:
+    """「1/22(金) 19:00〜21:00」。日付だけの候補は「1/22(金)」。"""
+    day = f"{start.month}/{start.day}({weekday(start)})"
+    if all_day:
+        return day
+    label = f"{day} {start:%H:%M}〜"
     return label + (f"{end:%H:%M}" if end else "")
+
+
+def label_of(c: PollCandidate) -> str:
+    return candidate_label(c.start, c.end, c.all_day)
 
 
 def _respondent_name(resp: PollResponse, names: dict[str, str]) -> str:
@@ -262,7 +271,7 @@ def view(repo: Repository, poll: SchedulePoll, user_id: str, display_name: str |
             "deadline": month_day_time(poll.deadline) if poll.deadline else None,
             "status": poll.status.value,
             "candidates": [
-                {"candidate_id": c.candidate_id, "label": candidate_label(c.start, c.end)}
+                {"candidate_id": c.candidate_id, "label": label_of(c)}
                 for c in poll.candidates
             ],
             "decided_candidate_id": poll.decided_candidate_id,
@@ -350,7 +359,7 @@ def summary(repo: Repository, poll: SchedulePoll) -> dict:
                 counts[cid][answer.value] += 1
     return {
         "poll": poll,
-        "candidates": [{**c.model_dump(mode="json"), "label": candidate_label(c.start, c.end)}
+        "candidates": [{**c.model_dump(mode="json"), "label": label_of(c)}
                        for c in poll.candidates],
         "rows": rows,
         "others": others,
@@ -362,7 +371,7 @@ def summary(repo: Repository, poll: SchedulePoll) -> dict:
 
 
 def announce_message(poll: SchedulePoll) -> Message:
-    lines = [{"type": "text", "text": f"・{candidate_label(c.start, c.end)}", "size": "sm",
+    lines = [{"type": "text", "text": f"・{label_of(c)}", "size": "sm",
               "wrap": True} for c in poll.candidates]
     body: list[dict] = []
     if poll.audience:
@@ -402,7 +411,10 @@ def remind_text(poll: SchedulePoll, pending: list[str]) -> str:
 
 def decided_text(poll: SchedulePoll) -> str:
     c = poll.candidate(poll.decided_candidate_id or "")
-    when = month_day_time(c.start) + "〜" if c else "（日時不明）"
+    if c is None:
+        when = "（日時不明）"
+    else:
+        when = month_day(c.start) if c.all_day else month_day_time(c.start) + "〜"
     place = f"（{poll.location}）" if poll.location else ""
     return f"【日程決定】{poll.title}\n{when}{place}に決まりました。ご回答ありがとうございました。"
 
@@ -515,16 +527,26 @@ def carry_answers(repo: Repository, poll: SchedulePoll, event: Event, now: datet
 
 
 def decide(repo: Repository, poll: SchedulePoll, candidate_id: str, actor: str, now: datetime,
-           *, notify: bool = True) -> tuple[SchedulePoll, Event]:
+           *, notify: bool = True) -> tuple[SchedulePoll, Event | None]:
     """候補日で決定し、イベント（受付中）を作ってカレンダーへ登録、グループへ連絡する。
 
     日程調整の回答はそのまま出欠に写す（もう一度出欠を聞かない）。
+    日付だけの候補は時刻が無く予定を作れないので、決定と連絡だけ行う（予定は手で登録する）。
     """
     if poll.status == PollStatus.decided:
         raise PollError(409, "すでに決定済みです。")
     candidate = poll.candidate(candidate_id)
     if candidate is None:
         raise PollError(400, "候補日が見つかりません。")
+    if candidate.all_day:
+        poll = poll.model_copy(update={"status": PollStatus.decided,
+                                       "decided_candidate_id": candidate_id})
+        repo.save_poll(poll)
+        write_audit(repo, actor=actor, action="poll.decide", target=poll.poll_id,
+                    detail=f"{poll.title} {label_of(candidate)}")
+        if notify:
+            _deliver(repo, poll, [TextMessage(text=decided_text(poll))])
+        return poll, None
     event = Event(
         event_id=f"ev_{uuid.uuid4().hex[:10]}", type=poll.event_type, title=poll.title,
         datetime_start=candidate.start, datetime_end=candidate.end, location=poll.location,
@@ -539,7 +561,7 @@ def decide(repo: Repository, poll: SchedulePoll, candidate_id: str, actor: str, 
     repo.save_poll(poll)
     carry_answers(repo, poll, event, now)
     write_audit(repo, actor=actor, action="poll.decide", target=poll.poll_id,
-                detail=f"{poll.title} {candidate_label(candidate.start, candidate.end)}")
+                detail=f"{poll.title} {label_of(candidate)}")
     if notify:
         _deliver(repo, poll, [TextMessage(text=decided_text(poll))])
     return poll, event

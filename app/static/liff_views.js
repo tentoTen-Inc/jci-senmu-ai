@@ -194,7 +194,7 @@
       const form = await api("GET", "/liff/api/ops/poll-form");
       bar.hidden = true;
       const d = { title: "", target: form.targets[0].value, event_type: form.targets[0].event_type, committee: "",
-                  location: "", deadline: "", candidates: [{ date: "", start: "19:00", end: "" }] };
+                  location: "", deadline: "", all_day: false, candidates: [{ date: "", start: "19:00", end: "" }] };
       // 送り先の説明（確認画面と同じ言い方）
       const destText = (x) => x.mode === "individual"
         ? `LINE 連携済みの ${x.linked} 人に個別に送ります（対象 ${x.targets} 人。委員会のグループが見つからないため）`
@@ -245,9 +245,12 @@
           el("label", {}, "場所（任意）", input({ type: "text", placeholder: "例: ○○会館 会議室 / オンライン" }, "location"))));
         kids.push(el("div", { class: "card form" },
           el("h2", {}, "2. 候補日時"),
+          el("label", { class: "check" },
+            el("input", { type: "checkbox", checked: d.all_day, onchange: (e) => { d.all_day = e.target.checked; draw(); } }),
+            el("span", {}, "日付だけで聞く（時刻なし。京都会議のような終日の行事に）")),
           ...d.candidates.map((c, i) => el("div", { class: "row" },
-            input({ type: "date" }, "date", c), input({ type: "time" }, "start", c),
-            el("span", {}, "〜"), input({ type: "time" }, "end", c),
+            input({ type: "date" }, "date", c),
+            ...(d.all_day ? [] : [input({ type: "time" }, "start", c), el("span", {}, "〜"), input({ type: "time" }, "end", c)]),
             d.candidates.length > 1 ? el("button", { type: "button", class: "x", onclick: () => { d.candidates.splice(i, 1); draw(); } }, "×") : null)),
           d.candidates.length < 10 ? el("div", { class: "actions" }, el("button", {
             type: "button", onclick: () => { d.candidates.push({ date: "", start: "19:00", end: "" }); draw(); },
@@ -258,14 +261,16 @@
           onclick: async (e) => {
             const cands = d.candidates.filter((c) => c.date);
             if (!d.title.trim()) return draw({ ok: false, text: "会議の名前を入力してください。" });
-            if (!cands.length || cands.some((c) => !c.start)) return draw({ ok: false, text: "候補日時（日付と開始時刻）を入力してください。" });
+            if (!cands.length || (!d.all_day && cands.some((c) => !c.start))) return draw({ ok: false, text: d.all_day ? "候補日を入力してください。" : "候補日時（日付と開始時刻）を入力してください。" });
             if (d.target === "committee" && !d.committee) return draw({ ok: false, text: "委員会を選んでください。" });
             e.target.disabled = true;
             try {
               created = await api("POST", "/liff/api/ops/polls", {
                 title: d.title, target: d.target, committee: d.committee, event_type: d.event_type, location: d.location,
                 deadline: d.deadline || null,
-                candidates: cands.map((c) => ({ start: `${c.date}T${c.start}`, end: c.end ? `${c.date}T${c.end}` : null })),
+                candidates: cands.map((c) => (d.all_day
+                  ? { start: `${c.date}T00:00`, end: null, all_day: true }
+                  : { start: `${c.date}T${c.start}`, end: c.end ? `${c.date}T${c.end}` : null })),
               });
               draw({ ok: true, text: "作成しました。内容と送り先を確かめて、案内してください（まだ送っていません）。" });
             } catch (err) { draw({ ok: false, text: err.message }); }
