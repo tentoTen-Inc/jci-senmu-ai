@@ -942,8 +942,10 @@ class PollStatus(StrEnum):
 
 class PollCandidate(BaseModel):
     candidate_id: str
-    start: datetime
+    start: datetime  # 日付だけ（all_day）のときは、その日の 0:00
     end: datetime | None = None
+    #: 時刻を決めず日付だけで聞く候補（京都会議のような終日・複数日の行事の出欠など）
+    all_day: bool = False
 
 
 class SchedulePoll(BaseModel):

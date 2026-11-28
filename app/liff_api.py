@@ -489,7 +489,7 @@ def make_poll(repo: Repository, member: Member, body: dict, now: datetime) -> di
     dest = sp.destination(repo, poll)
     return {"poll_id": poll.poll_id, "title": poll.title, "group_name": dest["group_name"],
             "mode": dest["mode"], "linked": dest["linked"],
-            "candidates": [sp.candidate_label(c.start, c.end) for c in poll.candidates],
+            "candidates": [sp.label_of(c) for c in poll.candidates],
             "targets": dest["targets"]}
 
 

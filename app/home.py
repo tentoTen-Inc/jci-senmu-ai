@@ -141,7 +141,7 @@ def build_home(repo: Repository, *, now: datetime) -> HomeData:
 
 
 def _poll_brief(repo: Repository, poll) -> PollBrief:
-    from .schedule_poll import candidate_label, summary  # 循環 import を避ける
+    from .schedule_poll import label_of, summary  # 循環 import を避ける
 
     data = summary(repo, poll)
     counts = data["counts"]
@@ -153,7 +153,7 @@ def _poll_brief(repo: Repository, poll) -> PollBrief:
             return (n["ok"], -n["ng"], n["maybe"], -c.start.timestamp())
 
         best = max(poll.candidates, key=score)
-        leading = candidate_label(best.start, best.end)
+        leading = label_of(best)
     return PollBrief(poll_id=poll.poll_id, title=poll.title,
                      answered=len(data["rows"]) - len(data["pending"]),
                      targets=len(data["rows"]), deadline=poll.deadline, leading=leading)
